@@ -6,4 +6,4 @@ set(CMAKE_CXX_STANDARD 20)
 add_subdirectory(3rd_party)
 
 add_executable(imgui_fc_DAW main.cpp)
-target_link_libraries(imgui_fc_DAW PRIVATE sokol imgui)
+target_link_libraries(imgui_fc_DAW PRIVATE sokol imgui game_music_emu)

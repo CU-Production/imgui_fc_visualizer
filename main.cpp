@@ -5,10 +5,14 @@
 #include "sokol_log.h"
 #include "sokol_glue.h"
 #include <vector>
+#include <cstring>
 
 #define SOKOL_IMGUI_IMPL
 #include "imgui.h"
 #include "util/sokol_imgui.h"
+
+// Game_Music_Emu for NSF file support
+#include "gme/gme.h"
 
 static bool show_test_window = true;
 static bool show_another_window = false;
@@ -16,6 +20,14 @@ static bool show_another_window = false;
 // application state
 static struct {
     sg_pass_action pass_action;
+    
+    // Game_Music_Emu state
+    Music_Emu* emu = nullptr;
+    bool is_playing = false;
+    int current_track = 0;
+    int track_count = 0;
+    char loaded_file[256] = "3rd_party/Game_Music_Emu/test.nsf";
+    char error_msg[512] = "";
 } state;
 
 void init(void) {
@@ -36,6 +48,86 @@ void frame(void) {
     const int height = sapp_height();
     simgui_new_frame({ width, height, sapp_frame_duration(), sapp_dpi_scale() });
 
+    // NSF Player Window
+    ImGui::Begin("NES Music DAW - Game_Music_Emu Test");
+    
+    ImGui::Text("Game_Music_Emu Integration Test");
+    ImGui::Separator();
+    
+    // File loading
+    ImGui::InputText("NSF File Path", state.loaded_file, sizeof(state.loaded_file));
+    ImGui::SameLine();
+    if (ImGui::Button("Load NSF")) {
+        if (state.emu) {
+            gme_delete(state.emu);
+            state.emu = nullptr;
+        }
+        
+        const long sample_rate = 44100;
+        gme_err_t err = gme_open_file(state.loaded_file, &state.emu, sample_rate);
+        if (err) {
+            strncpy(state.error_msg, err, sizeof(state.error_msg) - 1);
+            state.error_msg[sizeof(state.error_msg) - 1] = '\0';
+        } else {
+            state.track_count = gme_track_count(state.emu);
+            state.current_track = 0;
+            state.error_msg[0] = '\0';
+            ImGui::Text("Loaded successfully! Tracks: %d", state.track_count);
+        }
+    }
+    
+    if (state.error_msg[0] != '\0') {
+        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Error: %s", state.error_msg);
+    }
+    
+    if (state.emu) {
+        ImGui::Separator();
+        ImGui::Text("Tracks: %d", state.track_count);
+        
+        if (ImGui::SliderInt("Track", &state.current_track, 0, state.track_count - 1)) {
+            gme_start_track(state.emu, state.current_track);
+            state.is_playing = true;
+        }
+        
+        // Track info
+        track_info_t info;
+        if (gme_track_info(state.emu, &info, state.current_track) == nullptr) {
+            ImGui::Text("Game: %s", info.game);
+            ImGui::Text("Song: %s", info.song);
+            ImGui::Text("Author: %s", info.author);
+            if (info.length > 0) {
+                ImGui::Text("Length: %ld ms", info.length);
+            }
+        }
+        
+        ImGui::Separator();
+        
+        // Playback controls
+        if (ImGui::Button(state.is_playing ? "Stop" : "Play")) {
+            if (!state.is_playing) {
+                gme_err_t err = gme_start_track(state.emu, state.current_track);
+                if (err) {
+                    strncpy(state.error_msg, err, sizeof(state.error_msg) - 1);
+                } else {
+                    state.is_playing = true;
+                }
+            } else {
+                state.is_playing = false;
+            }
+        }
+        
+        if (state.is_playing) {
+            long pos = gme_tell(state.emu);
+            ImGui::Text("Position: %ld ms", pos);
+            
+            if (gme_track_ended(state.emu)) {
+                state.is_playing = false;
+            }
+        }
+    }
+    
+    ImGui::End();
+    
     // 1. Show a simple window
     // Tip: if we don't call ImGui::Begin()/ImGui::End() the widgets appears in a window automatically called "Debug"
     static float f = 0.0f;
@@ -74,6 +166,12 @@ void frame(void) {
 }
 
 void cleanup(void) {
+    // Cleanup Game_Music_Emu
+    if (state.emu) {
+        gme_delete(state.emu);
+        state.emu = nullptr;
+    }
+    
     simgui_shutdown();
     sg_shutdown();
 }
@@ -90,7 +188,7 @@ sapp_desc sokol_main(int argc, char* argv[]) {
     _sapp_desc.event_cb = input;
     _sapp_desc.width = 1280;
     _sapp_desc.height = 720;
-    _sapp_desc.window_title = "implot3d_mmd_renderer";
+    _sapp_desc.window_title = "NES Music DAW";
     _sapp_desc.icon.sokol_default = true;
     _sapp_desc.logger.func = slog_func;
     return _sapp_desc;
