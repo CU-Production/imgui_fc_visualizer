@@ -484,9 +484,7 @@ void PianoVisualizer::drawPianoWindow(bool* p_open, float current_time) {
     
     // Settings
     ImGui::SliderFloat("Roll Speed (sec)", &piano_roll_seconds_, 1.0f, 10.0f);
-    ImGui::SameLine();
     ImGui::SliderInt("Octave Low", &octave_low_, 0, 6);
-    ImGui::SameLine();
     ImGui::SliderInt("Octave High", &octave_high_, octave_low_ + 1, 8);
     
     ImGui::Separator();
