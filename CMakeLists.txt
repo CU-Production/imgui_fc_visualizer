@@ -5,5 +5,15 @@ set(CMAKE_CXX_STANDARD 20)
 
 add_subdirectory(3rd_party)
 
-add_executable(imgui_fc_DAW main.cpp)
+# Main application with audio visualizer
+add_executable(imgui_fc_DAW 
+    main.cpp 
+    AudioVisualizer.cpp 
+    AudioVisualizer.h
+)
 target_link_libraries(imgui_fc_DAW PRIVATE sokol imgui game_music_emu nfd)
+
+# Include directories for gme headers
+target_include_directories(imgui_fc_DAW PRIVATE 
+    ${CMAKE_SOURCE_DIR}/3rd_party/Game_Music_Emu
+)
