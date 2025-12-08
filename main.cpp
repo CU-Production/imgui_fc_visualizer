@@ -412,7 +412,7 @@ void draw_emulator_window(bool* p_open) {
             ImGui::Separator();
             
             // Controller info
-            ImGui::Text("Controls: Arrow Keys = D-Pad, Z = A, X = B, Enter = Start, Shift = Select");
+            ImGui::Text("Controls: Arrow Keys = D-Pad, Z = A, X = B, Enter = Start, BackSpace = Select");
         } else {
             // No ROM loaded
             ImVec2 content_size = ImGui::GetContentRegionAvail();
@@ -442,8 +442,7 @@ void update_nes_input() {
     state.nes_input.a = key_states[SAPP_KEYCODE_Z];
     state.nes_input.b = key_states[SAPP_KEYCODE_X];
     state.nes_input.start = key_states[SAPP_KEYCODE_ENTER];
-    state.nes_input.select = key_states[SAPP_KEYCODE_RIGHT_SHIFT] || 
-                             key_states[SAPP_KEYCODE_LEFT_SHIFT];
+    state.nes_input.select = key_states[SAPP_KEYCODE_BACKSPACE];
     
     // Set input to emulator
     state.nes_emu.setInput(0, state.nes_input);
