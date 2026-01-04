@@ -572,6 +572,9 @@ uint64_t agnes_get_cpu_cycles(const agnes_t *agnes) {
     return agnes->cpu.cycles;
 }
 
+// Forward declaration for mapper24 CPU cycle (needed for IRQ)
+static void mapper24_cpu_cycle(mapper24_t *mapper);
+
 bool agnes_load_ines_data(agnes_t *agnes, void *data, size_t data_size) {
     if (data_size < sizeof(ines_header_t)) {
         return false;
@@ -670,6 +673,13 @@ bool agnes_tick(agnes_t *agnes, bool *out_new_frame) {
     int ppu_cycles = cpu_cycles * 3;
     for (int i = 0; i < ppu_cycles; i++) {
         ppu_tick(&agnes->ppu, out_new_frame);
+    }
+    
+    // Run mapper-specific CPU cycle logic (for IRQ counters, etc.)
+    if (agnes->gamepack.mapper == 24 || agnes->gamepack.mapper == 26) {
+        for (int i = 0; i < cpu_cycles; i++) {
+            mapper24_cpu_cycle(&agnes->mapper.m24);
+        }
     }
     
     return true;
@@ -2665,8 +2675,11 @@ static void mapper24_set_offsets(mapper24_t *mapper);
 static void mapper24_init(mapper24_t *mapper, agnes_t *agnes) {
     mapper->agnes = agnes;
     
+    // VRC6 power-on state: first bank at $8000, second-to-last at $C000
     mapper->prg_bank_16k = 0;
-    mapper->prg_bank_8k = 0;
+    // Set $C000 bank to second-to-last 8KB bank for proper reset vector
+    int num_8k_banks = agnes->gamepack.prg_rom_banks_count * 2;
+    mapper->prg_bank_8k = (num_8k_banks > 1) ? (num_8k_banks - 2) : 0;
     mapper->ppu_ctrl = 0;
     
     mapper->irq_latch = 0;
@@ -2676,11 +2689,19 @@ static void mapper24_init(mapper24_t *mapper, agnes_t *agnes) {
     mapper->irq_mode = 0;
     mapper->irq_prescaler = 0;
     
+    // Initialize is_vrc6b (will be set by caller for mapper 26)
+    mapper->is_vrc6b = false;
+    
     mapper->use_chr_ram = agnes->gamepack.chr_rom_banks_count == 0;
     
+    // Initialize CHR banks - VRC6 power-on state is typically all zeros
+    // which maps all 8 1KB CHR banks to CHR-ROM banks 0-7 (first 8KB)
     for (int i = 0; i < 8; ++i) {
-        mapper->chr_bank_offsets[i] = i * 1024;
+        mapper->chr_bank_offsets[i] = i * 1024;  // Identity mapping
     }
+    
+    // Clear PRG RAM
+    memset(mapper->prg_ram, 0, sizeof(mapper->prg_ram));
     
     mapper24_set_offsets(mapper);
 }
@@ -2689,7 +2710,7 @@ static uint8_t mapper24_read(mapper24_t *mapper, uint16_t addr) {
     uint8_t res = 0;
     
     if (addr < 0x2000) {
-        // CHR ROM/RAM
+        // CHR ROM/RAM - 1KB banks
         int bank = (addr >> 10) & 0x7;
         unsigned bank_offset = mapper->chr_bank_offsets[bank];
         unsigned addr_offset = addr & 0x3ff;
@@ -2700,8 +2721,10 @@ static uint8_t mapper24_read(mapper24_t *mapper, uint16_t addr) {
             res = mapper->chr_ram[offset];
         } else {
             unsigned chr_size = mapper->agnes->gamepack.chr_rom_banks_count * 8 * 1024;
-            offset = offset % chr_size;
-            res = mapper->agnes->gamepack.data[mapper->agnes->gamepack.chr_rom_offset + offset];
+            if (chr_size > 0) {
+                offset = offset % chr_size;
+                res = mapper->agnes->gamepack.data[mapper->agnes->gamepack.chr_rom_offset + offset];
+            }
         }
     } else if (addr >= 0x6000 && addr < 0x8000) {
         // PRG RAM
@@ -2740,28 +2763,42 @@ static void mapper24_write(mapper24_t *mapper, uint16_t addr, uint8_t val) {
             reg_addr = (addr & 0xFFFC) | (a0 << 1) | (a1 << 0);
         }
         
-        // VRC6 register writes
-        if (reg_addr >= 0x8000 && reg_addr <= 0x8003) {
-            // $8000-$8003: 16K PRG bank at $8000-$BFFF
+        // VRC6 register writes - decode using address bits A12-A14 and A0-A1
+        // The register is selected by the high nibble, A0/A1 select sub-register
+        uint16_t reg_group = reg_addr & 0xF000;  // $8000, $9000, $A000, etc.
+        int sub_reg = reg_addr & 0x3;  // A0-A1 (after VRC6b swap if applicable)
+        
+        if (reg_group == 0x8000) {
+            // $8000-$8FFF: 16K PRG bank at $8000-$BFFF
             mapper->prg_bank_16k = val & 0x0F;
             mapper24_set_offsets(mapper);
-        } else if (reg_addr >= 0x9000 && reg_addr <= 0x9003) {
-            // $9000-$9002: VRC6 Pulse 1 audio (handled by APU callback)
-            if (mapper->agnes->apu_write) {
-                mapper->agnes->apu_write(mapper->agnes->apu_user_data, reg_addr, val, mapper->agnes->cpu.cycles);
+        } else if (reg_group == 0x9000) {
+            // $9000-$9FFF: VRC6 Pulse 1 audio
+            if (mapper->agnes->apu_write && sub_reg < 3) {
+                mapper->agnes->apu_write(mapper->agnes->apu_user_data, 0x9000 + sub_reg, val, mapper->agnes->cpu.cycles);
             }
-        } else if (reg_addr >= 0xA000 && reg_addr <= 0xA003) {
-            // $A000-$A002: VRC6 Pulse 2 audio
-            if (mapper->agnes->apu_write) {
-                mapper->agnes->apu_write(mapper->agnes->apu_user_data, reg_addr, val, mapper->agnes->cpu.cycles);
+        } else if (reg_group == 0xA000) {
+            // $A000-$AFFF: VRC6 Pulse 2 audio
+            if (mapper->agnes->apu_write && sub_reg < 3) {
+                mapper->agnes->apu_write(mapper->agnes->apu_user_data, 0xA000 + sub_reg, val, mapper->agnes->cpu.cycles);
             }
-        } else if (reg_addr >= 0xB000 && reg_addr <= 0xB003) {
-            // $B000-$B002: VRC6 Saw audio
-            // $B003: PPU control (mirroring, etc.)
-            if ((reg_addr & 0x3) == 0x3) {
+        } else if (reg_group == 0xB000) {
+            // $B000-$BFFF: VRC6 Saw audio + PPU control
+            if (sub_reg == 0x3) {
+                // $B003: PPU/Banking control
+                // 7  bit  0
+                // ---- ----
+                // W... SPMM
+                //      ||++- Mirroring mode
+                //      |+--- PPU banking mode (not implemented - standard mode)
+                //      +---- CHR-A10 source (not implemented)
+                // W = Work RAM control (bit 7)
                 mapper->ppu_ctrl = val;
-                // Mirroring: bits 2-3
-                switch ((val >> 2) & 0x3) {
+                
+                // Mirroring: bits 0-1
+                // According to nesdev: some docs say only bit 0, some say bits 0-1
+                // Castlevania 3 uses: 00=V, 01=H, 10=single0, 11=single1
+                switch (val & 0x3) {
                     case 0: mapper->agnes->mirroring_mode = MIRRORING_MODE_VERTICAL; break;
                     case 1: mapper->agnes->mirroring_mode = MIRRORING_MODE_HORIZONTAL; break;
                     case 2: mapper->agnes->mirroring_mode = MIRRORING_MODE_SINGLE_LOWER; break;
@@ -2769,29 +2806,27 @@ static void mapper24_write(mapper24_t *mapper, uint16_t addr, uint8_t val) {
                 }
             } else {
                 if (mapper->agnes->apu_write) {
-                    mapper->agnes->apu_write(mapper->agnes->apu_user_data, reg_addr, val, mapper->agnes->cpu.cycles);
+                    mapper->agnes->apu_write(mapper->agnes->apu_user_data, 0xB000 + sub_reg, val, mapper->agnes->cpu.cycles);
                 }
             }
-        } else if (reg_addr >= 0xC000 && reg_addr <= 0xC003) {
-            // $C000-$C003: 8K PRG bank at $C000-$DFFF
+        } else if (reg_group == 0xC000) {
+            // $C000-$CFFF: 8K PRG bank at $C000-$DFFF
             mapper->prg_bank_8k = val & 0x1F;
             mapper24_set_offsets(mapper);
-        } else if (reg_addr >= 0xD000 && reg_addr <= 0xD003) {
-            // $D000-$D003: CHR banks 0-3
-            int chr_bank = reg_addr & 0x3;
-            mapper->chr_bank_offsets[chr_bank] = val * 1024;
-        } else if (reg_addr >= 0xE000 && reg_addr <= 0xE003) {
-            // $E000-$E003: CHR banks 4-7
-            int chr_bank = 4 + (reg_addr & 0x3);
-            mapper->chr_bank_offsets[chr_bank] = val * 1024;
-        } else if (reg_addr >= 0xF000 && reg_addr <= 0xF003) {
-            // $F000: IRQ latch low
-            // $F001: IRQ control
-            // $F002: IRQ acknowledge
-            int reg = reg_addr & 0x3;
-            if (reg == 0) {
+        } else if (reg_group == 0xD000) {
+            // $D000-$DFFF: CHR banks 0-3 (1KB each)
+            mapper->chr_bank_offsets[sub_reg] = (unsigned)val * 1024;
+        } else if (reg_group == 0xE000) {
+            // $E000-$EFFF: CHR banks 4-7 (1KB each)
+            mapper->chr_bank_offsets[4 + sub_reg] = (unsigned)val * 1024;
+        } else if (reg_group == 0xF000) {
+            // $F000-$FFFF: IRQ control
+            // sub_reg 0: IRQ latch
+            // sub_reg 1: IRQ control
+            // sub_reg 2: IRQ acknowledge
+            if (sub_reg == 0) {
                 mapper->irq_latch = val;
-            } else if (reg == 1) {
+            } else if (sub_reg == 1) {
                 mapper->irq_mode = val;
                 mapper->irq_enabled_after_ack = (val & 0x01) != 0;
                 mapper->irq_enabled = (val & 0x02) != 0;
@@ -2799,7 +2834,7 @@ static void mapper24_write(mapper24_t *mapper, uint16_t addr, uint8_t val) {
                     mapper->irq_counter = mapper->irq_latch;
                     mapper->irq_prescaler = 0;
                 }
-            } else if (reg == 2) {
+            } else if (sub_reg == 2) {
                 // IRQ acknowledge
                 mapper->irq_enabled = mapper->irq_enabled_after_ack;
             }
@@ -2809,10 +2844,14 @@ static void mapper24_write(mapper24_t *mapper, uint16_t addr, uint8_t val) {
 
 static void mapper24_set_offsets(mapper24_t *mapper) {
     unsigned prg_rom_size = mapper->agnes->gamepack.prg_rom_banks_count * 16 * 1024;
+    if (prg_rom_size == 0) prg_rom_size = 32 * 1024;  // Minimum 32KB
     
-    // $8000-$BFFF: 16K switchable
-    mapper->prg_bank_offsets[0] = (mapper->prg_bank_16k * 16 * 1024) % prg_rom_size;
-    mapper->prg_bank_offsets[1] = mapper->prg_bank_offsets[0] + 8 * 1024;
+    // $8000-$9FFF: First 8K of 16K switchable bank
+    unsigned bank_16k_offset = (mapper->prg_bank_16k * 16 * 1024) % prg_rom_size;
+    mapper->prg_bank_offsets[0] = bank_16k_offset;
+    
+    // $A000-$BFFF: Second 8K of 16K switchable bank  
+    mapper->prg_bank_offsets[1] = bank_16k_offset + 8 * 1024;
     
     // $C000-$DFFF: 8K switchable
     mapper->prg_bank_offsets[2] = (mapper->prg_bank_8k * 8 * 1024) % prg_rom_size;
