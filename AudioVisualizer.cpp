@@ -276,28 +276,82 @@ void AudioVisualizer::updateChannelAmplitudes(const short* samples, int sample_c
 }
 
 void AudioVisualizer::updateChannelAmplitudesFromAPU(const int* amplitudes) {
+    // Deprecated: use the version with lengths parameter for accurate display
+    // This version doesn't know if channels are actually active
     std::lock_guard<std::mutex> lock(audio_mutex_);
-    
-    // NES APU amplitude ranges:
-    // Square 1/2: 0-15 (4-bit volume)
-    // Triangle: 0-15 (output level)
-    // Noise: 0-15 (4-bit volume)
-    // DMC: 0-127 (7-bit DAC)
     
     for (int i = 0; i < static_cast<int>(NesChannel::Count); ++i) {
         int amp = std::abs(amplitudes[i]);
-        float normalized;
+        float normalized = 0.0f;
         
-        if (i == static_cast<int>(NesChannel::DMC)) {
-            // DMC uses 7-bit DAC (0-127)
-            normalized = amp / 127.0f;
-        } else {
-            // Square, Triangle, Noise use 0-15 range
+        if (i == static_cast<int>(NesChannel::Square1) || 
+            i == static_cast<int>(NesChannel::Square2) ||
+            i == static_cast<int>(NesChannel::Noise)) {
+            // These channels: last_amp reflects actual volume (0-15)
             normalized = amp / 15.0f;
+        } else if (i == static_cast<int>(NesChannel::Triangle)) {
+            // Triangle: use amp > 0 as activity indicator, fixed level
+            normalized = (amp > 0) ? 0.8f : 0.0f;
+            normalized = amp / 15.0f;
+        } else if (i == static_cast<int>(NesChannel::DMC)) {
+            // DMC: use amp > 0 as activity indicator, fixed level
+            normalized = (amp > 0) ? 0.7f : 0.0f;
         }
         
-        // Apply some smoothing (decay old value, blend with new)
-        channel_amplitudes_[i] = std::max(channel_amplitudes_[i] * 0.8f, normalized);
+        channel_amplitudes_[i] = std::max(channel_amplitudes_[i] * 0.85f, normalized);
+        
+        if (channel_amplitudes_[i] > channel_peaks_[i]) {
+            channel_peaks_[i] = channel_amplitudes_[i];
+        }
+    }
+}
+
+void AudioVisualizer::updateChannelAmplitudesFromAPU(const int* amplitudes, const int* lengths) {
+    std::lock_guard<std::mutex> lock(audio_mutex_);
+    
+    // NES APU channel characteristics:
+    // Square 1/2: last_amp is actual output amplitude (-15 to +15), reflects volume
+    // Triangle: last_amp is waveform position (0-15 oscillating), NO volume control!
+    // Noise: last_amp is actual output amplitude, reflects volume  
+    // DMC: last_amp is DAC value (0-127), doesn't reset when stopped
+    
+    for (int i = 0; i < static_cast<int>(NesChannel::Count); ++i) {
+        float normalized = 0.0f;
+        bool use_averaging = false;  // Use averaging instead of max for some channels
+        
+        // Check if channel is active (length counter > 0)
+        bool is_active = (lengths[i] > 0);
+        
+        if (is_active) {
+            int amp = std::abs(amplitudes[i]);
+            
+            if (i == static_cast<int>(NesChannel::Square1) || 
+                i == static_cast<int>(NesChannel::Square2)) {
+                // Square waves: last_amp reflects actual volume (0-15)
+                normalized = amp / 15.0f;
+            } else if (i == static_cast<int>(NesChannel::Triangle)) {
+                // Triangle: NO volume control, waveform oscillates 0-15
+                // Use averaging to get stable ~0.5 level when active
+                normalized = amp / 15.0f;
+                use_averaging = true;
+            } else if (i == static_cast<int>(NesChannel::Noise)) {
+                // Noise: last_amp reflects actual volume (0-15)
+                normalized = amp / 15.0f;
+            } else if (i == static_cast<int>(NesChannel::DMC)) {
+                // DMC: DAC value (0-127), use it as activity level
+                normalized = amp / 127.0f;
+                use_averaging = true;
+            }
+        }
+        
+        // Apply smoothing
+        if (use_averaging) {
+            // For Triangle/DMC: use exponential moving average (smoother)
+            channel_amplitudes_[i] = channel_amplitudes_[i] * 0.95f + normalized * 0.05f;
+        } else {
+            // For Square/Noise: use max with decay (responsive to peaks)
+            channel_amplitudes_[i] = std::max(channel_amplitudes_[i] * 0.85f, normalized);
+        }
         
         // Update peaks
         if (channel_amplitudes_[i] > channel_peaks_[i]) {

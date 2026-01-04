@@ -126,7 +126,7 @@ void audio_stream_callback(float* buffer, int num_frames, int num_channels, void
         // Update piano visualizer and channel levels with APU data
         int periods[5], lengths[5], amplitudes[5];
         state.nes_emu.getApuState(periods, lengths, amplitudes);
-        state.visualizer.updateChannelAmplitudesFromAPU(amplitudes);
+        state.visualizer.updateChannelAmplitudesFromAPU(amplitudes, lengths);
         float current_time = static_cast<float>(state.nes_emu.getCpuCycles()) / 1789773.0f;
         state.piano.updateFromAPU(periods, lengths, amplitudes, current_time);
         
@@ -185,7 +185,7 @@ void audio_stream_callback(float* buffer, int num_frames, int num_channels, void
                 lengths[i] = apu->osc_length(i);
                 amplitudes[i] = apu->osc_amplitude(i);
             }
-            state.visualizer.updateChannelAmplitudesFromAPU(amplitudes);
+            state.visualizer.updateChannelAmplitudesFromAPU(amplitudes, lengths);
             state.piano.updateFromAPU(periods, lengths, amplitudes, current_time);
         }
     }

@@ -95,13 +95,21 @@ void PianoVisualizer::processApuFrame(const int* periods, const int* lengths, co
                 velocity = std::min(1.0f, amp / 15.0f);
             }
         } else if (ch == 4) {
-            // DMC
-            if (length > 0 && amp > 0) {
+            // DMC - check if actively playing (length > 0 means bytes remaining)
+            if (length > 0) {
                 midi_note = 28;
-                velocity = std::min(1.0f, amp / 127.0f);
+                velocity = 0.8f;  // Fixed velocity when DMC is playing
+            }
+        } else if (ch == 2) {
+            // Triangle - doesn't have volume control, just on/off
+            // last_amp is the waveform position (0-15), not volume
+            if (length > 0 && period >= 8) {
+                float freq = NES_CPU_CLOCK / (16.0f * (period + 1));
+                midi_note = frequencyToMidi(freq);
+                velocity = 0.8f;  // Fixed velocity for Triangle
             }
         } else {
-            // Square1, Square2, Triangle
+            // Square1, Square2
             if (length > 0 && amp > 0 && period >= 8) {
                 float freq = NES_CPU_CLOCK / (16.0f * (period + 1));
                 midi_note = frequencyToMidi(freq);
@@ -287,11 +295,20 @@ void PianoVisualizer::updateFromAPU(const int* periods, const int* lengths, cons
                 velocity = std::min(1.0f, amp / 15.0f);
             }
         } else if (ch == 4) {
-            if (length > 0 && amp > 0) {
+            // DMC - check if actively playing
+            if (length > 0) {
                 midi_note = 28;
-                velocity = std::min(1.0f, amp / 127.0f);
+                velocity = 0.8f;  // Fixed velocity when DMC is playing
+            }
+        } else if (ch == 2) {
+            // Triangle - no volume control, just on/off
+            if (length > 0 && period >= 8) {
+                float freq = NES_CPU_CLOCK / (16.0f * (period + 1));
+                midi_note = frequencyToMidi(freq);
+                velocity = 0.8f;  // Fixed velocity for Triangle
             }
         } else {
+            // Square1, Square2
             if (length > 0 && amp > 0 && period >= 8) {
                 float freq = NES_CPU_CLOCK / (16.0f * (period + 1));
                 midi_note = frequencyToMidi(freq);

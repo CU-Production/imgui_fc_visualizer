@@ -62,6 +62,7 @@ public:
     
     // Update channel amplitudes from APU (for accurate per-channel levels)
     void updateChannelAmplitudesFromAPU(const int* amplitudes);
+    void updateChannelAmplitudesFromAPU(const int* amplitudes, const int* lengths);
 
     // Draw the complete visualizer window
     void drawVisualizerWindow(bool* p_open = nullptr);
