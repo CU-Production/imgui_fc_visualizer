@@ -1,6 +1,7 @@
 #include "PianoVisualizer.h"
 #include "gme/gme.h"
 #include "gme/Nes_Apu.h"
+#include "gme/Nes_Vrc6_Apu.h"
 #include <algorithm>
 #include <cstring>
 
@@ -148,6 +149,61 @@ void PianoVisualizer::processApuFrame(const int* periods, const int* lengths, co
     }
 }
 
+void PianoVisualizer::processVrc6Frame(const int* periods, const int* volumes, const bool* enabled, float current_time) {
+    // VRC6 channels: Pulse1 (ch 5), Pulse2 (ch 6), Saw (ch 7)
+    for (int i = 0; i < PIANO_NUM_CHANNELS_VRC6; ++i) {
+        int ch = PIANO_NUM_CHANNELS_BASE + i;  // 5, 6, 7
+        int period = periods[i];
+        int volume = volumes[i];
+        bool is_enabled = enabled[i];
+        
+        int midi_note = -1;
+        float velocity = 0;
+        
+        if (is_enabled && volume > 0 && period >= 1) {
+            // VRC6 period formula: freq = CPU_CLOCK / (16 * (period + 1))
+            float freq = NES_CPU_CLOCK / (16.0f * (period + 1));
+            midi_note = frequencyToMidi(freq);
+            
+            if (i < 2) {
+                // Pulse waves - 4-bit volume (0-15)
+                velocity = std::min(1.0f, volume / 15.0f);
+            } else {
+                // Saw wave - accumulator rate (0-63)
+                velocity = std::min(1.0f, volume / 42.0f);
+            }
+        }
+        
+        int prev_note = preprocess_prev_notes_[ch];
+        
+        // Note changed or ended
+        if (midi_note != prev_note || velocity < 0.01f) {
+            // End previous note
+            if (prev_note >= 0 && prev_note <= 127) {
+                PianoRollNote note;
+                note.channel = ch;
+                note.midi_note = prev_note;
+                note.velocity = preprocess_note_velocity_[ch];
+                note.start_time = preprocess_note_start_[ch];
+                note.end_time = current_time;
+                
+                if (note.end_time - note.start_time > 0.01f) {
+                    preprocessed_notes_.push_back(note);
+                }
+            }
+            
+            // Start new note
+            if (midi_note >= 0 && midi_note <= 127 && velocity > 0.01f) {
+                preprocess_prev_notes_[ch] = midi_note;
+                preprocess_note_start_[ch] = current_time;
+                preprocess_note_velocity_[ch] = velocity;
+            } else {
+                preprocess_prev_notes_[ch] = -1;
+            }
+        }
+    }
+}
+
 void PianoVisualizer::finalizePreprocessing(float end_time) {
     // End any notes still playing
     for (int ch = 0; ch < PIANO_NUM_CHANNELS_MAX; ++ch) {
@@ -179,7 +235,8 @@ void PianoVisualizer::finalizePreprocessing(float end_time) {
 
 bool PianoVisualizer::preprocessTrack(Music_Emu* emu, int track, long sample_rate,
                                        ApuDataCallback apu_callback,
-                                       std::function<void(float)> progress_callback) {
+                                       std::function<void(float)> progress_callback,
+                                       Vrc6DataCallback vrc6_callback) {
     if (!emu || !apu_callback) return false;
     
     std::lock_guard<std::mutex> lock(mutex_);
@@ -188,7 +245,9 @@ bool PianoVisualizer::preprocessTrack(Music_Emu* emu, int track, long sample_rat
     preprocessed_notes_.clear();
     has_preprocessed_data_ = false;
     track_duration_ = 0.0f;
-    has_vrc6_ = false;
+    
+    // Check if VRC6 is available
+    has_vrc6_ = (vrc6_callback != nullptr) && (vrc6_callback(emu) != nullptr);
     
     for (int i = 0; i < PIANO_NUM_CHANNELS_MAX; ++i) {
         preprocess_prev_notes_[i] = -1;
@@ -235,6 +294,21 @@ bool PianoVisualizer::preprocessTrack(Music_Emu* emu, int track, long sample_rat
                 amplitudes[i] = apu->osc_amplitude(i);
             }
             processApuFrame(periods, lengths, amplitudes, current_time);
+        }
+        
+        // Get VRC6 state if available
+        if (has_vrc6_ && vrc6_callback) {
+            Nes_Vrc6_Apu* vrc6 = vrc6_callback(emu);
+            if (vrc6) {
+                int vrc6_periods[3], vrc6_volumes[3];
+                bool vrc6_enabled[3];
+                for (int i = 0; i < 3; ++i) {
+                    vrc6_periods[i] = vrc6->osc_period(i);
+                    vrc6_volumes[i] = vrc6->osc_volume(i);
+                    vrc6_enabled[i] = vrc6->osc_enabled(i);
+                }
+                processVrc6Frame(vrc6_periods, vrc6_volumes, vrc6_enabled, current_time);
+            }
         }
         
         current_time += time_per_chunk;

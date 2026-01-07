@@ -53,6 +53,7 @@ inline const char* PianoChannelNames[] = {
 
 // Callback type for getting APU data during preprocessing
 using ApuDataCallback = std::function<Nes_Apu*(Music_Emu*)>;
+using Vrc6DataCallback = std::function<Nes_Vrc6_Apu*(Music_Emu*)>;
 
 class PianoVisualizer {
 public:
@@ -67,7 +68,8 @@ public:
     // progress_callback: optional callback for progress updates (0.0-1.0)
     bool preprocessTrack(Music_Emu* emu, int track, long sample_rate,
                         ApuDataCallback apu_callback,
-                        std::function<void(float)> progress_callback = nullptr);
+                        std::function<void(float)> progress_callback = nullptr,
+                        Vrc6DataCallback vrc6_callback = nullptr);
     
     // Check if we have preprocessed data
     bool hasPreprocessedData() const { return has_preprocessed_data_; }
@@ -141,6 +143,7 @@ private:
     
     // Process APU data during preprocessing
     void processApuFrame(const int* periods, const int* lengths, const int* amplitudes, float current_time);
+    void processVrc6Frame(const int* periods, const int* volumes, const bool* enabled, float current_time);
     void finalizePreprocessing(float end_time);
     
     // Convert APU period to MIDI note

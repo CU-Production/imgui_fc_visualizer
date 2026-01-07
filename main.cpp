@@ -301,6 +301,10 @@ void preprocess_piano_track() {
         },
         [](float progress) {
             state.preprocess_progress.store(progress);
+        },
+        [](Music_Emu* emu) -> Nes_Vrc6_Apu* {
+            Nsf_Emu* nsf = dynamic_cast<Nsf_Emu*>(emu);
+            return nsf ? nsf->vrc6_() : nullptr;
         }
     );
     
