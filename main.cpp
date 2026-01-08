@@ -543,7 +543,86 @@ void init(void) {
 
     simgui_desc_t simgui_desc = { };
     simgui_desc.logger.func = slog_func;
+    simgui_desc.no_default_font = true; // Disable default font to load custom font
     simgui_setup(&simgui_desc);
+
+    // Load font with Chinese/Japanese support
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Try to load system fonts that support CJK characters
+    ImFont* font = nullptr;
+
+#ifdef _WIN32
+    // Try Windows system fonts that support Chinese/Japanese
+    const char* font_paths[] = {
+        "C:/Windows/Fonts/msyh.ttc",          // Microsoft YaHei (Chinese)
+        "C:/Windows/Fonts/msgothic.ttc",      // MS Gothic (Japanese)
+        "C:/Windows/Fonts/msyhbd.ttc",        // Microsoft YaHei Bold
+        "C:/Windows/Fonts/simsun.ttc",        // SimSun (Chinese)
+    };
+
+    for (const char* font_path : font_paths) {
+        // Check if file exists by trying to open it
+        FILE* test_file = fopen(font_path, "rb");
+        if (test_file) {
+            fclose(test_file);
+            // Load font with CJK glyph ranges (includes Chinese, Japanese, Korean)
+            font = io.Fonts->AddFontFromFileTTF(font_path, 16.0f, nullptr,
+                io.Fonts->GetGlyphRangesChineseFull());
+            if (font) {
+                break;
+            }
+        }
+    }
+
+    // If no system font found, add default font and try to merge CJK glyphs
+    if (!font) {
+        font = io.Fonts->AddFontDefault();
+        if (font) {
+            // Merge in Chinese/Japanese glyphs from system fonts
+            ImFontConfig config;
+            config.MergeMode = true;
+            config.GlyphMinAdvanceX = 13.0f; // Use if you want to make the icon monospaced
+            config.PixelSnapH = true;
+
+            // Try to merge CJK characters from any available font
+            for (const char* font_path : font_paths) {
+                FILE* test_file = fopen(font_path, "rb");
+                if (test_file) {
+                    fclose(test_file);
+                    io.Fonts->AddFontFromFileTTF(font_path, 16.0f, &config,
+                        io.Fonts->GetGlyphRangesChineseFull());
+                    break;
+                }
+            }
+        }
+    }
+#else
+    // On Linux/Mac, try common font paths
+    const char* font_paths[] = {
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/PingFang.ttc",  // macOS
+        "/System/Library/Fonts/STHeiti Light.ttc",  // macOS Chinese
+    };
+
+    for (const char* font_path : font_paths) {
+        FILE* test_file = fopen(font_path, "rb");
+        if (test_file) {
+            fclose(test_file);
+            font = io.Fonts->AddFontFromFileTTF(font_path, 16.0f, nullptr,
+                io.Fonts->GetGlyphRangesChineseFull());
+            if (font) {
+                break;
+            }
+        }
+    }
+
+    // Fallback to default font if no custom font found
+    if (!font) {
+        font = io.Fonts->AddFontDefault();
+    }
+#endif
 
     // Use ImGui default dark theme (blue style)
     ImGui::StyleColorsDark();
