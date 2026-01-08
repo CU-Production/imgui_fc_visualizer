@@ -625,7 +625,21 @@ void init(void) {
     // Load font with Chinese/Japanese support
     ImGuiIO& io = ImGui::GetIO();
 
-    // Try to load system fonts that support CJK characters
+    // Custom glyph ranges: Chinese + media control symbols
+    // Media symbols: ⏮⏭⏸⏹▶ are in U+23E0-U+23FF and U+25B0-U+25BF
+    static const ImWchar custom_ranges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin Supplement
+        0x2000, 0x206F, // General Punctuation
+        0x2300, 0x23FF, // Miscellaneous Technical (contains ⏮⏭⏸⏹)
+        0x25A0, 0x25FF, // Geometric Shapes (contains ▶■)
+        0x2600, 0x26FF, // Miscellaneous Symbols
+        0x3000, 0x30FF, // CJK Symbols and Punctuation, Hiragana, Katakana
+        0x31F0, 0x31FF, // Katakana Phonetic Extensions
+        0x4E00, 0x9FFF, // CJK Unified Ideographs (Chinese)
+        0xFF00, 0xFFEF, // Halfwidth and Fullwidth Forms
+        0,
+    };
+
     ImFont* font = nullptr;
 
 #ifdef _WIN32
@@ -638,40 +652,48 @@ void init(void) {
     };
 
     for (const char* font_path : font_paths) {
-        // Check if file exists by trying to open it
         FILE* test_file = fopen(font_path, "rb");
         if (test_file) {
             fclose(test_file);
-            // Load font with CJK glyph ranges (includes Chinese, Japanese, Korean)
-            font = io.Fonts->AddFontFromFileTTF(font_path, 16.0f, nullptr,
-                io.Fonts->GetGlyphRangesChineseFull());
+            font = io.Fonts->AddFontFromFileTTF(font_path, 16.0f, nullptr, custom_ranges);
             if (font) {
                 break;
             }
         }
     }
 
-    // If no system font found, add default font and try to merge CJK glyphs
-    if (!font) {
-        font = io.Fonts->AddFontDefault();
-        if (font) {
-            // Merge in Chinese/Japanese glyphs from system fonts
-            ImFontConfig config;
-            config.MergeMode = true;
-            config.GlyphMinAdvanceX = 13.0f; // Use if you want to make the icon monospaced
-            config.PixelSnapH = true;
-
-            // Try to merge CJK characters from any available font
-            for (const char* font_path : font_paths) {
-                FILE* test_file = fopen(font_path, "rb");
-                if (test_file) {
-                    fclose(test_file);
-                    io.Fonts->AddFontFromFileTTF(font_path, 16.0f, &config,
-                        io.Fonts->GetGlyphRangesChineseFull());
-                    break;
-                }
+    // Merge Segoe UI Symbol for media control icons (has ⏮⏭⏸⏹▶)
+    if (font) {
+        ImFontConfig config;
+        config.MergeMode = true;
+        config.GlyphMinAdvanceX = 16.0f;
+        config.PixelSnapH = true;
+        
+        // Segoe UI Symbol contains media control symbols
+        const char* symbol_fonts[] = {
+            "C:/Windows/Fonts/seguisym.ttf",   // Segoe UI Symbol
+            "C:/Windows/Fonts/segmdl2.ttf",    // Segoe MDL2 Assets
+        };
+        
+        static const ImWchar symbol_ranges[] = {
+            0x2300, 0x23FF, // Miscellaneous Technical
+            0x25A0, 0x25FF, // Geometric Shapes
+            0,
+        };
+        
+        for (const char* symbol_path : symbol_fonts) {
+            FILE* test_file = fopen(symbol_path, "rb");
+            if (test_file) {
+                fclose(test_file);
+                io.Fonts->AddFontFromFileTTF(symbol_path, 16.0f, &config, symbol_ranges);
+                break;
             }
         }
+    }
+
+    // If no system font found, add default font
+    if (!font) {
+        font = io.Fonts->AddFontDefault();
     }
 #else
     // On Linux/Mac, try common font paths
@@ -686,8 +708,7 @@ void init(void) {
         FILE* test_file = fopen(font_path, "rb");
         if (test_file) {
             fclose(test_file);
-            font = io.Fonts->AddFontFromFileTTF(font_path, 16.0f, nullptr,
-                io.Fonts->GetGlyphRangesChineseFull());
+            font = io.Fonts->AddFontFromFileTTF(font_path, 16.0f, nullptr, custom_ranges);
             if (font) {
                 break;
             }
@@ -946,11 +967,12 @@ void draw_player_window() {
         
         ImGui::Separator();
         
-        // Playback controls
+        // Playback controls (using UTF-8 hex escape for Unicode symbols)
+        // ⏮ = U+23EE, ▶ = U+25B6, ⏸ = U+23F8, ⏹ = U+23F9, ⏭ = U+23ED
         ImGui::BeginGroup();
         {
-            // Previous track
-            if (ImGui::Button("|<", ImVec2(40, 30))) {
+            // Previous track (⏮)
+            if (ImGui::Button("\xE2\x8F\xAE", ImVec2(40, 30))) {
                 if (state.current_track > 0) {
                     state.current_track--;
                     start_track_with_preprocess(state.current_track);
@@ -958,8 +980,8 @@ void draw_player_window() {
             }
             ImGui::SameLine();
             
-            // Play/Pause
-            const char* play_label = state.is_playing.load() ? "||" : ">";
+            // Play/Pause (▶ / ⏸)
+            const char* play_label = state.is_playing.load() ? "\xE2\x8F\xB8" : "\xE2\x96\xB6";
             if (ImGui::Button(play_label, ImVec2(50, 30))) {
                 if (!state.is_playing.load()) {
                     // Start track if not started, otherwise just resume
@@ -975,16 +997,16 @@ void draw_player_window() {
             }
             ImGui::SameLine();
             
-            // Stop (reset to beginning)
-            if (ImGui::Button("[]", ImVec2(40, 30))) {
+            // Stop (⏹)
+            if (ImGui::Button("\xE2\x8F\xB9", ImVec2(40, 30))) {
                 state.is_playing.store(false);
                 // Reset to beginning of track
                 state.seek_request.store(0);
             }
             ImGui::SameLine();
             
-            // Next track
-            if (ImGui::Button(">|", ImVec2(40, 30))) {
+            // Next track (⏭)
+            if (ImGui::Button("\xE2\x8F\xAD", ImVec2(40, 30))) {
                 if (state.current_track < state.track_count - 1) {
                     state.current_track++;
                     start_track_with_preprocess(state.current_track);
