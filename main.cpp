@@ -37,6 +37,66 @@
 
 #include <cctype>
 #include <cstring>
+#include <fstream>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+// UTF-8 file reading helper for Windows
+// Returns true if file was read successfully, data is stored in out_data
+static bool read_file_utf8(const char* path, std::vector<uint8_t>& out_data) {
+    out_data.clear();
+    
+#ifdef _WIN32
+    // Convert UTF-8 path to wide string for Windows
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
+    if (wlen <= 0) return false;
+    
+    std::vector<wchar_t> wpath(wlen);
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath.data(), wlen);
+    
+    // Open file with wide path
+    FILE* file = _wfopen(wpath.data(), L"rb");
+    if (!file) return false;
+    
+    // Get file size
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    
+    if (size <= 0) {
+        fclose(file);
+        return false;
+    }
+    
+    // Read file data
+    out_data.resize(size);
+    size_t read = fread(out_data.data(), 1, size, file);
+    fclose(file);
+    
+    return read == static_cast<size_t>(size);
+#else
+    // On non-Windows, use standard fopen (most Unix systems handle UTF-8 natively)
+    FILE* file = fopen(path, "rb");
+    if (!file) return false;
+    
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    
+    if (size <= 0) {
+        fclose(file);
+        return false;
+    }
+    
+    out_data.resize(size);
+    size_t read = fread(out_data.data(), 1, size, file);
+    fclose(file);
+    
+    return read == static_cast<size_t>(size);
+#endif
+}
 
 // Helper function to check file extension (case-insensitive)
 static bool has_extension(const char* path, const char* ext) {
@@ -285,9 +345,17 @@ void preprocess_piano_track() {
     state.preprocessing.store(true);
     state.preprocess_progress.store(0.0f);
     
+    // Load file data with UTF-8 path support
+    std::vector<uint8_t> file_data;
+    if (!read_file_utf8(state.loaded_file, file_data)) {
+        state.preprocessing.store(false);
+        return;
+    }
+    
     // Create a separate emulator instance for preprocessing
     Music_Emu* preprocess_emu = nullptr;
-    gme_err_t err = gme_open_file(state.loaded_file, &preprocess_emu, state.sample_rate);
+    gme_err_t err = gme_open_data(file_data.data(), static_cast<long>(file_data.size()), 
+                                   &preprocess_emu, state.sample_rate);
     
     if (err || !preprocess_emu) {
         state.preprocessing.store(false);
@@ -359,8 +427,17 @@ void load_nsf_file(const char* path) {
     // Reset seek request
     state.seek_request.store(-1);
     
-    // Load new file
-    gme_err_t err = gme_open_file(path, &state.emu, state.sample_rate);
+    // Load file with UTF-8 path support
+    std::vector<uint8_t> file_data;
+    if (!read_file_utf8(path, file_data)) {
+        strncpy(state.error_msg, "Failed to open file", sizeof(state.error_msg) - 1);
+        state.error_msg[sizeof(state.error_msg) - 1] = '\0';
+        return;
+    }
+    
+    // Load from memory data
+    gme_err_t err = gme_open_data(file_data.data(), static_cast<long>(file_data.size()), 
+                                   &state.emu, state.sample_rate);
     if (err) {
         strncpy(state.error_msg, err, sizeof(state.error_msg) - 1);
         state.error_msg[sizeof(state.error_msg) - 1] = '\0';

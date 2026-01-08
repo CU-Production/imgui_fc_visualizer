@@ -5,6 +5,10 @@
 #include <fstream>
 #include <cmath>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 // NES color palette (NTSC - from Nestopia)
 const uint32_t NesEmulator::nes_palette_[64] = {
     0xFF666666, 0xFF002A88, 0xFF1412A7, 0xFF3B00A4, 0xFF5C007E, 0xFF6E0040, 0xFF6C0600, 0xFF561D00,
@@ -72,16 +76,40 @@ void NesEmulator::initApu() {
 }
 
 bool NesEmulator::loadROM(const char* path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
+    FILE* file = nullptr;
+    
+#ifdef _WIN32
+    // Convert UTF-8 path to wide string for Windows
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
+    if (wlen > 0) {
+        std::vector<wchar_t> wpath(wlen);
+        MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath.data(), wlen);
+        file = _wfopen(wpath.data(), L"rb");
+    }
+#else
+    file = fopen(path, "rb");
+#endif
+    
+    if (!file) {
         return false;
     }
     
-    size_t size = file.tellg();
-    file.seekg(0, std::ios::beg);
+    // Get file size
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
     
+    if (size <= 0) {
+        fclose(file);
+        return false;
+    }
+    
+    // Read file data
     rom_data_.resize(size);
-    if (!file.read(reinterpret_cast<char*>(rom_data_.data()), size)) {
+    size_t read = fread(rom_data_.data(), 1, size, file);
+    fclose(file);
+    
+    if (read != static_cast<size_t>(size)) {
         return false;
     }
     
@@ -128,21 +156,16 @@ void NesEmulator::reset() {
     
     std::lock_guard<std::mutex> lock(mutex_);
     
-    // Reload the ROM to reset
-    if (!rom_path_.empty()) {
-        std::ifstream file(rom_path_, std::ios::binary | std::ios::ate);
-        if (file.is_open()) {
-            size_t size = file.tellg();
-            file.seekg(0, std::ios::beg);
-            rom_data_.clear();
-            rom_data_.resize(size);
-            file.read(reinterpret_cast<char*>(rom_data_.data()), size);
-            agnes_load_ines_data(agnes_, rom_data_.data(), rom_data_.size());
-        }
+    // Reload the ROM from cached data to reset
+    if (!rom_data_.empty()) {
+        agnes_load_ines_data(agnes_, rom_data_.data(), rom_data_.size());
     }
     
     // Reset APU
     apu_.reset(false);
+    if (has_vrc6_) {
+        vrc6_apu_.reset();
+    }
     apu_buffer_.clear();
     last_apu_cycle_ = 0;
 }
@@ -258,7 +281,7 @@ int NesEmulator::readAudioSamples(short* buffer, int max_samples) {
     long available = apu_buffer_.samples_avail();
     if (available <= 0) return 0;
     
-    int to_read = std::min(static_cast<int>(available), max_samples);
+    int to_read = min(static_cast<int>(available), max_samples);
     return static_cast<int>(apu_buffer_.read_samples(buffer, to_read));
 }
 
