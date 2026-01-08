@@ -110,7 +110,7 @@ AudioVisualizer::~AudioVisualizer() {
 
 bool AudioVisualizer::init(Music_Emu* emu, long sample_rate) {
     std::lock_guard<std::mutex> lock(audio_mutex_);
-    
+
     emu_ = emu;
     sample_rate_ = sample_rate;
     is_initialized_ = (emu != nullptr);
@@ -463,13 +463,13 @@ ImU32 AudioVisualizer::getSpectrumColor(float normalized_value, float normalized
 }
 
 void AudioVisualizer::drawVisualizerWindow(bool* p_open) {
-    ImGui::SetNextWindowSize(ImVec2(600, 500), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(600, 520), ImGuiCond_FirstUseEver);
     
     if (!ImGui::Begin("Audio Visualizer", p_open)) {
         ImGui::End();
         return;
     }
-    
+
     // Decay peaks
     decayPeaks(ImGui::GetIO().DeltaTime);
     
@@ -492,7 +492,7 @@ void AudioVisualizer::drawVisualizerWindow(bool* p_open) {
     ImGui::EndChild();
     
     // Middle section: Volume meters
-    ImGui::BeginChild("Meters Section", ImVec2(available_width, 100), true);
+    ImGui::BeginChild("Meters Section", ImVec2(available_width, 110), true);
     ImGui::Text("Channel Levels");
     ImGui::Separator();
     drawVolumeMeters(available_width - 16, 60);
@@ -516,7 +516,7 @@ void AudioVisualizer::drawWaveformScope(const char* label, float width, float he
     ImVec2 canvas_size(width, height);
     
     // Background
-    draw_list->AddRectFilled(canvas_pos,
+    draw_list->AddRectFilled(canvas_pos, 
                             ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y),
                             IM_COL32(15, 15, 25, 255));
     
