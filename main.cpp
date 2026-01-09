@@ -31,9 +31,16 @@
 // NES Emulator
 #include "NesEmulator.h"
 
+// TinySoundFont for MIDI playback
+#include "TinySoundFont/tsf.h"
+
+// TinyMidiLoader for MIDI file parsing
+#include "TinySoundFont/tml.h"
+
 #include <cctype>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -116,13 +123,35 @@ static bool show_demo_window = false;
 static bool show_visualizer = true;
 static bool show_piano = true;
 static bool show_emulator = false;
+static bool show_midi_player = false;
 
-// Application mode: NSF Player or NES Emulator
+// Application mode: NSF Player, NES Emulator, or MIDI Player
 enum class AppMode {
     NSF_PLAYER,
-    NES_EMULATOR
+    NES_EMULATOR,
+    MIDI_PLAYER
 };
 static AppMode current_mode = AppMode::NSF_PLAYER;
+
+// MIDI Player state
+static struct {
+    tsf* soundfont = nullptr;
+    tml_message* midi_file = nullptr;
+    tml_message* midi_current = nullptr;  // Current position in MIDI
+    double midi_time = 0.0;               // Current playback time in seconds
+    bool midi_playing = false;
+    char midi_loaded_file[512] = "";
+    char soundfont_loaded[512] = "";
+    
+    // SoundFont selection
+    std::vector<std::string> soundfont_files;
+    int selected_soundfont = -1;
+    
+    // Playback info
+    float midi_volume = 1.0f;
+    double midi_total_time = 0.0;
+    int midi_tempo = 120;  // Current tempo in BPM
+} midi_state;
 
 // Keyboard state tracking for NES input
 static bool key_states[512] = {};  // Track key press states
@@ -181,6 +210,72 @@ static struct {
 // Audio stream callback - called from audio thread
 void audio_stream_callback(float* buffer, int num_frames, int num_channels, void* user_data) {
     const int num_samples = num_frames * num_channels;
+    
+    // Handle MIDI Player mode
+    if (current_mode == AppMode::MIDI_PLAYER && midi_state.soundfont && midi_state.midi_playing) {
+        // Calculate time increment per sample
+        double time_per_sample = 1.0 / state.sample_rate;
+        
+        // Render MIDI to buffer
+        tsf_render_float(midi_state.soundfont, buffer, num_frames, 0);
+        
+        // Process MIDI events during this time window
+        double end_time = midi_state.midi_time + (num_frames * time_per_sample);
+        
+        while (midi_state.midi_current && midi_state.midi_current->time / 1000.0 < end_time) {
+            tml_message* msg = midi_state.midi_current;
+            
+            switch (msg->type) {
+                case TML_PROGRAM_CHANGE:
+                    tsf_channel_set_presetnumber(midi_state.soundfont, msg->channel, msg->program, (msg->channel == 9));
+                    break;
+                case TML_NOTE_ON:
+                    tsf_channel_note_on(midi_state.soundfont, msg->channel, msg->key, msg->velocity / 127.0f);
+                    break;
+                case TML_NOTE_OFF:
+                    tsf_channel_note_off(midi_state.soundfont, msg->channel, msg->key);
+                    break;
+                case TML_PITCH_BEND:
+                    tsf_channel_set_pitchwheel(midi_state.soundfont, msg->channel, msg->pitch_bend);
+                    break;
+                case TML_CONTROL_CHANGE:
+                    tsf_channel_midi_control(midi_state.soundfont, msg->channel, msg->control, msg->control_value);
+                    break;
+                case TML_SET_TEMPO:
+                    midi_state.midi_tempo = static_cast<int>(60000000.0 / tml_get_tempo_value(msg));
+                    break;
+                default:
+                    break;
+            }
+            
+            midi_state.midi_current = msg->next;
+        }
+        
+        // Update playback time
+        midi_state.midi_time = end_time;
+        
+        // Apply volume
+        for (int i = 0; i < num_samples; ++i) {
+            buffer[i] *= midi_state.midi_volume;
+        }
+        
+        // Check if MIDI ended
+        if (!midi_state.midi_current) {
+            midi_state.midi_playing = false;
+        }
+        
+        // Update visualizer with audio data (convert float to short for visualizer)
+        static std::vector<short> temp_buffer;
+        temp_buffer.resize(num_samples);
+        for (int i = 0; i < num_samples; ++i) {
+            float sample = buffer[i] * 32767.0f;
+            sample = std::clamp(sample, -32768.0f, 32767.0f);
+            temp_buffer[i] = static_cast<short>(sample);
+        }
+        state.visualizer.updateAudioData(temp_buffer.data(), num_samples);
+        
+        return;
+    }
     
     // Handle NES Emulator mode
     if (current_mode == AppMode::NES_EMULATOR && state.nes_emu.isRunning()) {
@@ -482,6 +577,137 @@ void load_nes_rom(const char* path) {
     }
 }
 
+// Scan SoundFont folder for .sf2 files
+void scan_soundfont_folder() {
+    midi_state.soundfont_files.clear();
+    
+    // Try multiple possible SoundFont directories
+    const char* folders[] = {
+        "SoundFont",
+        "./SoundFont",
+        "../SoundFont",
+    };
+    
+    for (const char* folder : folders) {
+        try {
+            std::filesystem::path sf_path(folder);
+            if (std::filesystem::exists(sf_path) && std::filesystem::is_directory(sf_path)) {
+                for (const auto& entry : std::filesystem::directory_iterator(sf_path)) {
+                    if (entry.is_regular_file()) {
+                        std::string ext = entry.path().extension().string();
+                        // Convert to lowercase
+                        for (char& c : ext) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+                        if (ext == ".sf2" || ext == ".sf3") {
+                            midi_state.soundfont_files.push_back(entry.path().string());
+                        }
+                    }
+                }
+                if (!midi_state.soundfont_files.empty()) {
+                    break;  // Found files, stop searching
+                }
+            }
+        } catch (...) {
+            // Ignore filesystem errors
+        }
+    }
+    
+    // Sort files alphabetically
+    std::sort(midi_state.soundfont_files.begin(), midi_state.soundfont_files.end());
+    
+    // Auto-select first SoundFont if available
+    if (!midi_state.soundfont_files.empty() && midi_state.selected_soundfont < 0) {
+        midi_state.selected_soundfont = 0;
+    }
+}
+
+// Load SoundFont file
+bool load_soundfont(const char* path) {
+    // Unload previous SoundFont
+    if (midi_state.soundfont) {
+        tsf_close(midi_state.soundfont);
+        midi_state.soundfont = nullptr;
+    }
+    
+    // Load new SoundFont
+    midi_state.soundfont = tsf_load_filename(path);
+    if (!midi_state.soundfont) {
+        return false;
+    }
+    
+    // Configure output (stereo, 44100 Hz)
+    tsf_set_output(midi_state.soundfont, TSF_STEREO_INTERLEAVED, state.sample_rate, 0);
+    
+    strncpy(midi_state.soundfont_loaded, path, sizeof(midi_state.soundfont_loaded) - 1);
+    midi_state.soundfont_loaded[sizeof(midi_state.soundfont_loaded) - 1] = '\0';
+    
+    return true;
+}
+
+// Calculate total MIDI duration
+double calculate_midi_duration(tml_message* midi) {
+    double total_time = 0.0;
+    int tempo = 500000;  // Default tempo (120 BPM)
+    
+    for (tml_message* msg = midi; msg; msg = msg->next) {
+        if (msg->type == TML_SET_TEMPO) {
+            tempo = tml_get_tempo_value(msg);
+        }
+        // Time is in milliseconds from TML
+        double msg_time = msg->time / 1000.0;
+        if (msg_time > total_time) {
+            total_time = msg_time;
+        }
+    }
+    
+    return total_time;
+}
+
+// Load MIDI file
+bool load_midi_file(const char* path) {
+    // Stop current playback
+    midi_state.midi_playing = false;
+    
+    // Unload previous MIDI
+    if (midi_state.midi_file) {
+        tml_free(midi_state.midi_file);
+        midi_state.midi_file = nullptr;
+    }
+    
+    // Load new MIDI file
+    midi_state.midi_file = tml_load_filename(path);
+    if (!midi_state.midi_file) {
+        return false;
+    }
+    
+    // Reset playback position
+    midi_state.midi_current = midi_state.midi_file;
+    midi_state.midi_time = 0.0;
+    midi_state.midi_total_time = calculate_midi_duration(midi_state.midi_file);
+    
+    strncpy(midi_state.midi_loaded_file, path, sizeof(midi_state.midi_loaded_file) - 1);
+    midi_state.midi_loaded_file[sizeof(midi_state.midi_loaded_file) - 1] = '\0';
+    
+    // Reset all notes if SoundFont is loaded
+    if (midi_state.soundfont) {
+        tsf_reset(midi_state.soundfont);
+    }
+    
+    // Switch to MIDI player mode
+    current_mode = AppMode::MIDI_PLAYER;
+    show_midi_player = true;
+    
+    return true;
+}
+
+// Reset MIDI playback to beginning
+void reset_midi_playback() {
+    midi_state.midi_current = midi_state.midi_file;
+    midi_state.midi_time = 0.0;
+    if (midi_state.soundfont) {
+        tsf_reset(midi_state.soundfont);
+    }
+}
+
 // Draw NES Emulator window
 void draw_emulator_window(bool* p_open) {
     ImGui::SetNextWindowSize(ImVec2(540, 540), ImGuiCond_FirstUseEver);
@@ -609,6 +835,182 @@ void update_nes_input() {
     
     // Set input to emulator
     state.nes_emu.setInput(0, state.nes_input);
+}
+
+// Draw MIDI Player window
+void draw_midi_player_window(bool* p_open) {
+    ImGui::SetNextWindowSize(ImVec2(450, 380), ImGuiCond_FirstUseEver);
+    
+    if (ImGui::Begin("MIDI Player", p_open, ImGuiWindowFlags_MenuBar)) {
+        // Menu bar
+        if (ImGui::BeginMenuBar()) {
+            if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem("Open MIDI...", "Ctrl+M")) {
+                    nfdu8filteritem_t filterItem[2];
+                    filterItem[0].name = "MIDI Files";
+                    filterItem[0].spec = "mid,midi";
+                    filterItem[1].name = "All Files";
+                    filterItem[1].spec = "*";
+                    
+                    nfdu8char_t* outPath = nullptr;
+                    nfdresult_t result = NFD_OpenDialogU8(&outPath, filterItem, 2, nullptr);
+                    
+                    if (result == NFD_OKAY) {
+                        load_midi_file(outPath);
+                        NFD_FreePathU8(outPath);
+                    }
+                }
+                if (ImGui::MenuItem("Open SoundFont...")) {
+                    nfdu8filteritem_t filterItem[2];
+                    filterItem[0].name = "SoundFont Files";
+                    filterItem[0].spec = "sf2,sf3";
+                    filterItem[1].name = "All Files";
+                    filterItem[1].spec = "*";
+                    
+                    nfdu8char_t* outPath = nullptr;
+                    nfdresult_t result = NFD_OpenDialogU8(&outPath, filterItem, 2, nullptr);
+                    
+                    if (result == NFD_OKAY) {
+                        load_soundfont(outPath);
+                        NFD_FreePathU8(outPath);
+                        // Refresh list and find the new file
+                        scan_soundfont_folder();
+                    }
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Refresh SoundFonts")) {
+                    scan_soundfont_folder();
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::EndMenuBar();
+        }
+        
+        // SoundFont selection
+        ImGui::Text("SoundFont:");
+        if (midi_state.soundfont_files.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "No SoundFont files found!");
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Place .sf2 files in 'SoundFont' folder");
+        } else {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            if (ImGui::BeginCombo("##soundfont", 
+                midi_state.selected_soundfont >= 0 ? 
+                    std::filesystem::path(midi_state.soundfont_files[midi_state.selected_soundfont]).filename().string().c_str() : 
+                    "Select SoundFont...")) {
+                for (int i = 0; i < static_cast<int>(midi_state.soundfont_files.size()); ++i) {
+                    std::string filename = std::filesystem::path(midi_state.soundfont_files[i]).filename().string();
+                    bool is_selected = (midi_state.selected_soundfont == i);
+                    if (ImGui::Selectable(filename.c_str(), is_selected)) {
+                        midi_state.selected_soundfont = i;
+                        load_soundfont(midi_state.soundfont_files[i].c_str());
+                    }
+                    if (is_selected) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
+        
+        ImGui::Separator();
+        
+        // MIDI file info
+        if (midi_state.midi_file) {
+            // Extract filename from path
+            std::string filename = std::filesystem::path(midi_state.midi_loaded_file).filename().string();
+            ImGui::Text("File: %s", filename.c_str());
+            ImGui::Text("Tempo: %d BPM", midi_state.midi_tempo);
+            
+            ImGui::Separator();
+            
+            // Playback position
+            int pos_sec = static_cast<int>(midi_state.midi_time) % 60;
+            int pos_min = static_cast<int>(midi_state.midi_time) / 60;
+            int len_sec = static_cast<int>(midi_state.midi_total_time) % 60;
+            int len_min = static_cast<int>(midi_state.midi_total_time) / 60;
+            
+            char time_str[64];
+            snprintf(time_str, sizeof(time_str), "%02d:%02d / %02d:%02d", 
+                     pos_min, pos_sec, len_min, len_sec);
+            
+            float progress = midi_state.midi_total_time > 0 ? 
+                static_cast<float>(midi_state.midi_time / midi_state.midi_total_time) : 0.0f;
+            progress = std::clamp(progress, 0.0f, 1.0f);
+            
+            float time_width = ImGui::CalcTextSize(time_str).x;
+            float available_width = ImGui::GetContentRegionAvail().x;
+            float slider_width = available_width - time_width - 20;
+            
+            ImGui::SetNextItemWidth(slider_width);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.20f, 0.15f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.50f, 0.80f, 0.50f, 1.0f));
+            if (ImGui::SliderFloat("##midiseek", &progress, 0.0f, 1.0f, "")) {
+                // Seek in MIDI - need to restart from beginning and fast-forward
+                reset_midi_playback();
+                midi_state.midi_time = progress * midi_state.midi_total_time;
+                // Fast-forward through MIDI events
+                while (midi_state.midi_current && midi_state.midi_current->time / 1000.0 < midi_state.midi_time) {
+                    tml_message* msg = midi_state.midi_current;
+                    if (msg->type == TML_PROGRAM_CHANGE && midi_state.soundfont) {
+                        tsf_channel_set_presetnumber(midi_state.soundfont, msg->channel, msg->program, (msg->channel == 9));
+                    }
+                    midi_state.midi_current = msg->next;
+                }
+            }
+            ImGui::PopStyleColor(2);
+            
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.7f, 0.9f, 0.7f, 1.0f), "%s", time_str);
+            
+            ImGui::Separator();
+            
+            // Playback controls
+            ImGui::BeginGroup();
+            {
+                // Play/Pause
+                const char* play_label = midi_state.midi_playing ? "\xE2\x8F\xB8" : "\xE2\x96\xB6";
+                if (ImGui::Button(play_label, ImVec2(50, 30))) {
+                    if (midi_state.soundfont) {
+                        midi_state.midi_playing = !midi_state.midi_playing;
+                    }
+                }
+                ImGui::SameLine();
+                
+                // Stop
+                if (ImGui::Button("\xE2\x8F\xB9", ImVec2(40, 30))) {
+                    midi_state.midi_playing = false;
+                    reset_midi_playback();
+                }
+            }
+            ImGui::EndGroup();
+            
+            ImGui::Separator();
+            
+            // Volume control
+            ImGui::SetNextItemWidth(200);
+            ImGui::SliderFloat("Volume##midi", &midi_state.midi_volume, 0.0f, 2.0f, "%.2f");
+            ImGui::SameLine();
+            if (ImGui::Button("1.0##midivol")) {
+                midi_state.midi_volume = 1.0f;
+            }
+            
+        } else {
+            ImGui::Dummy(ImVec2(0, 20));
+            ImGui::TextColored(ImVec4(0.5f, 0.6f, 0.5f, 1.0f), "Load a MIDI file to start playing!");
+            ImGui::Dummy(ImVec2(0, 10));
+            ImGui::TextColored(ImVec4(0.4f, 0.5f, 0.4f, 1.0f), "Supported formats: .mid, .midi");
+        }
+        
+        ImGui::Separator();
+        
+        // Status bar
+        if (midi_state.soundfont) {
+            ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.3f, 1.0f), "SoundFont: Loaded");
+        } else {
+            ImGui::TextColored(ImVec4(0.8f, 0.5f, 0.3f, 1.0f), "SoundFont: Not loaded");
+        }
+    }
+    ImGui::End();
 }
 
 void init(void) {
@@ -743,6 +1145,14 @@ void init(void) {
     
     // Initialize NES Emulator
     state.nes_emu.init(state.sample_rate);
+    
+    // Scan SoundFont folder
+    scan_soundfont_folder();
+    
+    // Auto-load first SoundFont if available
+    if (!midi_state.soundfont_files.empty()) {
+        load_soundfont(midi_state.soundfont_files[0].c_str());
+    }
 }
 
 void draw_player_window() {
@@ -753,19 +1163,19 @@ void draw_player_window() {
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Open NSF...", "Ctrl+O")) {
-                nfdu8filteritem_t filterItem[2];
-                filterItem[0].name = "NES Sound Files";
-                filterItem[0].spec = "nsf,nsfe";
-                filterItem[1].name = "All Files";
-                filterItem[1].spec = "*";
-                
-                nfdu8char_t* outPath = nullptr;
-                nfdresult_t result = NFD_OpenDialogU8(&outPath, filterItem, 2, nullptr);
-                
-                if (result == NFD_OKAY) {
+        nfdu8filteritem_t filterItem[2];
+        filterItem[0].name = "NES Sound Files";
+        filterItem[0].spec = "nsf,nsfe";
+        filterItem[1].name = "All Files";
+        filterItem[1].spec = "*";
+        
+        nfdu8char_t* outPath = nullptr;
+        nfdresult_t result = NFD_OpenDialogU8(&outPath, filterItem, 2, nullptr);
+        
+        if (result == NFD_OKAY) {
                     load_nsf_file(outPath);
                     postload_preprocess();
-                    NFD_FreePathU8(outPath);
+            NFD_FreePathU8(outPath);
                 }
             }
             ImGui::Separator();
@@ -791,6 +1201,25 @@ void draw_player_window() {
                 }
             }
             ImGui::MenuItem("Show Emulator Window", nullptr, &show_emulator);
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("MIDI")) {
+            if (ImGui::MenuItem("Open MIDI...", "Ctrl+M")) {
+                nfdu8filteritem_t filterItem[2];
+                filterItem[0].name = "MIDI Files";
+                filterItem[0].spec = "mid,midi";
+                filterItem[1].name = "All Files";
+                filterItem[1].spec = "*";
+                
+                nfdu8char_t* outPath = nullptr;
+                nfdresult_t result = NFD_OpenDialogU8(&outPath, filterItem, 2, nullptr);
+                
+                if (result == NFD_OKAY) {
+                    load_midi_file(outPath);
+                    NFD_FreePathU8(outPath);
+                }
+            }
+            ImGui::MenuItem("Show MIDI Player", nullptr, &show_midi_player);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View")) {
@@ -821,7 +1250,7 @@ void draw_player_window() {
     
     if (state.loaded_file[0] != '\0') {
         ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "%s", filename);
-    } else {
+        } else {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(No file loaded)");
     }
     
@@ -848,7 +1277,7 @@ void draw_player_window() {
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error: %s", state.error_msg);
     }
     
-    ImGui::Separator();
+        ImGui::Separator();
     
     // Track info and controls (only if file loaded)
     if (state.emu) {
@@ -858,15 +1287,15 @@ void draw_player_window() {
             ImGui::BeginChild("TrackInfo", ImVec2(0, 80), true);
             
             if (info.game[0]) {
-                ImGui::Text("Game: %s", info.game);
+            ImGui::Text("Game: %s", info.game);
             }
             if (info.song[0]) {
-                ImGui::Text("Song: %s", info.song);
+            ImGui::Text("Song: %s", info.song);
             } else {
                 ImGui::Text("Track: %d / %d", state.current_track + 1, state.track_count);
             }
             if (info.author[0]) {
-                ImGui::Text("Author: %s", info.author);
+            ImGui::Text("Author: %s", info.author);
             }
             if (info.copyright[0]) {
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "© %s", info.copyright);
@@ -987,7 +1416,7 @@ void draw_player_window() {
                     // Start track if not started, otherwise just resume
                     if (!state.track_started.load()) {
                         safe_start_track(state.current_track);
-                    } else {
+            } else {
                         state.is_playing.store(true);
                     }
                 } else {
@@ -1003,7 +1432,7 @@ void draw_player_window() {
                 // Reset to beginning of track
                 state.seek_request.store(0);
             }
-            ImGui::SameLine();
+        ImGui::SameLine();
             
             // Next track (⏭)
             if (ImGui::Button("\xE2\x8F\xAD", ImVec2(40, 30))) {
@@ -1075,9 +1504,9 @@ void draw_player_window() {
     ImGui::Separator();
     
     // Status bar
-    if (state.audio_initialized) {
+        if (state.audio_initialized) {
         ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.3f, 1.0f), "Audio: Ready (%ld Hz)", state.sample_rate);
-    } else {
+        } else {
         ImGui::TextColored(ImVec4(0.8f, 0.3f, 0.3f, 1.0f), "Audio: Not initialized");
     }
     
@@ -1106,6 +1535,11 @@ void frame(void) {
     // NES Emulator window
     if (show_emulator) {
         draw_emulator_window(&show_emulator);
+    }
+    
+    // MIDI Player window
+    if (show_midi_player) {
+        draw_midi_player_window(&show_midi_player);
     }
     
     // Visualizer window
@@ -1138,15 +1572,26 @@ void frame(void) {
 void cleanup(void) {
     // Stop audio playback
     state.is_playing.store(false);
+    midi_state.midi_playing = false;
     
     // Wait for audio thread to finish
     {
         std::lock_guard<std::mutex> lock(audio_mutex);
-        // Cleanup Game_Music_Emu
-        if (state.emu) {
-            gme_delete(state.emu);
-            state.emu = nullptr;
+    // Cleanup Game_Music_Emu
+    if (state.emu) {
+        gme_delete(state.emu);
+        state.emu = nullptr;
         }
+    }
+    
+    // Cleanup MIDI resources
+    if (midi_state.midi_file) {
+        tml_free(midi_state.midi_file);
+        midi_state.midi_file = nullptr;
+    }
+    if (midi_state.soundfont) {
+        tsf_close(midi_state.soundfont);
+        midi_state.soundfont = nullptr;
     }
     
     // Cleanup sokol_audio
@@ -1176,6 +1621,11 @@ void input(const sapp_event* ev) {
                     postload_preprocess();
                 } else if (has_extension(path, "nes")) {
                     load_nes_rom(path);
+                } else if (has_extension(path, "mid") || has_extension(path, "midi")) {
+                    load_midi_file(path);
+                } else if (has_extension(path, "sf2") || has_extension(path, "sf3")) {
+                    load_soundfont(path);
+                    scan_soundfont_folder();  // Refresh list
                 }
             }
         }
@@ -1258,6 +1708,23 @@ void input(const sapp_event* ev) {
             
             if (result == NFD_OKAY) {
                 load_nes_rom(outPath);
+                NFD_FreePathU8(outPath);
+            }
+        }
+        
+        // Ctrl+M: Open MIDI file
+        if (ev->key_code == SAPP_KEYCODE_M && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+            nfdu8filteritem_t filterItem[2];
+            filterItem[0].name = "MIDI Files";
+            filterItem[0].spec = "mid,midi";
+            filterItem[1].name = "All Files";
+            filterItem[1].spec = "*";
+            
+            nfdu8char_t* outPath = nullptr;
+            nfdresult_t result = NFD_OpenDialogU8(&outPath, filterItem, 2, nullptr);
+            
+            if (result == NFD_OKAY) {
+                load_midi_file(outPath);
                 NFD_FreePathU8(outPath);
             }
         }
