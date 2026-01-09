@@ -123,6 +123,29 @@ static bool has_extension(const char* path, const char* ext) {
     return true;
 }
 
+// Helper function to extract filename from path (UTF-8 safe)
+static std::string get_filename_from_path(const char* path) {
+    if (!path || path[0] == '\0') return "";
+    
+    // Find last separator (both / and \ for cross-platform)
+    const char* last_sep = nullptr;
+    for (const char* p = path; *p; ++p) {
+        if (*p == '/' || *p == '\\') {
+            last_sep = p;
+        }
+    }
+    
+    if (last_sep) {
+        return std::string(last_sep + 1);
+    }
+    return std::string(path);
+}
+
+// Helper function to extract filename from std::string path (UTF-8 safe)
+static std::string get_filename_from_path(const std::string& path) {
+    return get_filename_from_path(path.c_str());
+}
+
 static bool show_demo_window = false;
 static bool show_visualizer = true;
 static bool show_piano = true;
@@ -624,7 +647,7 @@ void scan_soundfont_folder() {
     }
 }
 
-// Load SoundFont file
+// Load SoundFont file (with UTF-8 path support)
 bool load_soundfont(const char* path) {
     // Unload previous SoundFont
     if (midi_state.soundfont) {
@@ -632,8 +655,14 @@ bool load_soundfont(const char* path) {
         midi_state.soundfont = nullptr;
     }
     
-    // Load new SoundFont
-    midi_state.soundfont = tsf_load_filename(path);
+    // Load file with UTF-8 path support
+    std::vector<uint8_t> file_data;
+    if (!read_file_utf8(path, file_data)) {
+        return false;
+    }
+    
+    // Load SoundFont from memory
+    midi_state.soundfont = tsf_load_memory(file_data.data(), static_cast<int>(file_data.size()));
     if (!midi_state.soundfont) {
         return false;
     }
@@ -666,7 +695,7 @@ double calculate_midi_duration(tml_message* midi) {
     return total_time;
 }
 
-// Load MIDI file
+// Load MIDI file (with UTF-8 path support)
 bool load_midi_file(const char* path) {
     // Stop current playback
     midi_state.midi_playing = false;
@@ -677,8 +706,14 @@ bool load_midi_file(const char* path) {
         midi_state.midi_file = nullptr;
     }
     
-    // Load new MIDI file
-    midi_state.midi_file = tml_load_filename(path);
+    // Load file with UTF-8 path support
+    std::vector<uint8_t> file_data;
+    if (!read_file_utf8(path, file_data)) {
+        return false;
+    }
+    
+    // Load MIDI from memory
+    midi_state.midi_file = tml_load_memory(file_data.data(), static_cast<int>(file_data.size()));
     if (!midi_state.midi_file) {
         return false;
     }
@@ -897,12 +932,17 @@ void draw_midi_player_window(bool* p_open) {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Place .sf2 files in 'SoundFont' folder");
         } else {
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-            if (ImGui::BeginCombo("##soundfont", 
+            // Get current SoundFont filename for combo display
+        static std::string current_sf_name;
+        if (midi_state.selected_soundfont >= 0) {
+            current_sf_name = get_filename_from_path(midi_state.soundfont_files[midi_state.selected_soundfont]);
+        }
+        if (ImGui::BeginCombo("##soundfont", 
                 midi_state.selected_soundfont >= 0 ? 
-                    std::filesystem::path(midi_state.soundfont_files[midi_state.selected_soundfont]).filename().string().c_str() : 
+                    current_sf_name.c_str() : 
                     "Select SoundFont...")) {
                 for (int i = 0; i < static_cast<int>(midi_state.soundfont_files.size()); ++i) {
-                    std::string filename = std::filesystem::path(midi_state.soundfont_files[i]).filename().string();
+                    std::string filename = get_filename_from_path(midi_state.soundfont_files[i]);
                     bool is_selected = (midi_state.selected_soundfont == i);
                     if (ImGui::Selectable(filename.c_str(), is_selected)) {
                         midi_state.selected_soundfont = i;
@@ -920,8 +960,8 @@ void draw_midi_player_window(bool* p_open) {
         
         // MIDI file info
         if (midi_state.midi_file) {
-            // Extract filename from path
-            std::string filename = std::filesystem::path(midi_state.midi_loaded_file).filename().string();
+            // Extract filename from path (UTF-8 safe)
+            std::string filename = get_filename_from_path(midi_state.midi_loaded_file);
             ImGui::Text("File: %s", filename.c_str());
             ImGui::Text("Tempo: %d BPM", midi_state.midi_tempo);
             
