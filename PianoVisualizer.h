@@ -12,6 +12,7 @@
 struct Music_Emu;
 class Nes_Apu;
 class Nes_Vrc6_Apu;
+struct tml_message;
 
 // NES APU channel info for piano visualization
 struct NesNoteInfo {
@@ -33,9 +34,13 @@ struct PianoRollNote {
 // Maximum channel count (base APU + VRC6)
 constexpr int PIANO_NUM_CHANNELS_BASE = 5;
 constexpr int PIANO_NUM_CHANNELS_VRC6 = 3;
-constexpr int PIANO_NUM_CHANNELS_MAX = 8;
+constexpr int PIANO_NUM_CHANNELS_NES_MAX = 8;
 
-// Channel colors for piano visualization
+// MIDI has 16 channels
+constexpr int PIANO_NUM_CHANNELS_MIDI = 16;
+constexpr int PIANO_NUM_CHANNELS_MAX = 16;  // Max of NES or MIDI
+
+// Channel colors for piano visualization (NES)
 inline const ImU32 PianoChannelColors[] = {
     IM_COL32(255, 80, 80, 220),   // Square 1 - Red
     IM_COL32(255, 160, 60, 220),  // Square 2 - Orange
@@ -49,6 +54,26 @@ inline const ImU32 PianoChannelColors[] = {
 
 inline const char* PianoChannelNames[] = {
     "Sq1", "Sq2", "Tri", "Noi", "DMC", "V-P1", "V-P2", "V-Saw"
+};
+
+// MIDI channel colors (16 channels)
+inline const ImU32 MidiChannelColors[] = {
+    IM_COL32(255, 80, 80, 220),   // Ch 1 - Red
+    IM_COL32(255, 140, 60, 220),  // Ch 2 - Orange
+    IM_COL32(255, 200, 60, 220),  // Ch 3 - Yellow-Orange
+    IM_COL32(220, 220, 80, 220),  // Ch 4 - Yellow
+    IM_COL32(140, 220, 80, 220),  // Ch 5 - Yellow-Green
+    IM_COL32(60, 220, 100, 220),  // Ch 6 - Green
+    IM_COL32(60, 220, 180, 220),  // Ch 7 - Cyan-Green
+    IM_COL32(60, 200, 220, 220),  // Ch 8 - Cyan
+    IM_COL32(60, 140, 220, 220),  // Ch 9 - Light Blue
+    IM_COL32(120, 80, 180, 220),  // Ch 10 (Drums) - Purple
+    IM_COL32(180, 80, 220, 220),  // Ch 11 - Magenta
+    IM_COL32(220, 80, 180, 220),  // Ch 12 - Pink
+    IM_COL32(220, 100, 140, 220), // Ch 13 - Rose
+    IM_COL32(180, 120, 100, 220), // Ch 14 - Brown
+    IM_COL32(140, 140, 160, 220), // Ch 15 - Gray
+    IM_COL32(100, 160, 180, 220)  // Ch 16 - Steel
 };
 
 // Callback type for getting APU data during preprocessing
@@ -87,7 +112,19 @@ public:
     void setVRC6Enabled(bool enabled) { has_vrc6_ = enabled; }
     bool hasVRC6() const { return has_vrc6_; }
     void updateFromVRC6(const int* periods, const int* volumes, const bool* enabled, float current_time);
-    int getActiveChannelCount() const { return has_vrc6_ ? PIANO_NUM_CHANNELS_MAX : PIANO_NUM_CHANNELS_BASE; }
+    int getActiveChannelCount() const { 
+        if (is_midi_mode_) return PIANO_NUM_CHANNELS_MIDI;
+        return has_vrc6_ ? PIANO_NUM_CHANNELS_NES_MAX : PIANO_NUM_CHANNELS_BASE; 
+    }
+    
+    // MIDI support
+    void setMidiMode(bool enabled) { is_midi_mode_ = enabled; }
+    bool isMidiMode() const { return is_midi_mode_; }
+    void midiNoteOn(int channel, int note, float velocity, float current_time);
+    void midiNoteOff(int channel, int note, float current_time);
+    void midiAllNotesOff();
+    void preprocessMidi(const struct tml_message* midi_data);
+    void updateMidiTime(float current_time);
 
     // Draw the piano keyboard
     void drawPianoKeyboard(const char* label, float width, float height);
@@ -116,6 +153,15 @@ private:
     bool has_preprocessed_data_ = false;
     float track_duration_ = 0.0f;
     bool has_vrc6_ = false;
+    bool is_midi_mode_ = false;
+    
+    // Active MIDI notes (for tracking note-off events)
+    struct MidiNoteState {
+        bool active = false;
+        float start_time = 0.0f;
+        float velocity = 0.0f;
+    };
+    std::array<std::array<MidiNoteState, 128>, PIANO_NUM_CHANNELS_MIDI> midi_note_states_;
     
     // For preprocessing: track note state
     std::array<int, PIANO_NUM_CHANNELS_MAX> preprocess_prev_notes_;

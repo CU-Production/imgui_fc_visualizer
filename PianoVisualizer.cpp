@@ -2,6 +2,7 @@
 #include "gme/gme.h"
 #include "gme/Nes_Apu.h"
 #include "gme/Nes_Vrc6_Apu.h"
+#include "TinySoundFont/tml.h"
 #include <algorithm>
 #include <cstring>
 
@@ -447,7 +448,12 @@ void PianoVisualizer::drawKey(ImDrawList* draw_list, ImVec2 pos, float width, fl
     ImU32 border_color = IM_COL32(40, 40, 40, 255);
     
     if (pressed_channel >= 0 && velocity > 0.05f) {
-        key_color = PianoChannelColors[pressed_channel];
+        // Select color based on mode
+        if (is_midi_mode_) {
+            key_color = MidiChannelColors[pressed_channel % PIANO_NUM_CHANNELS_MIDI];
+        } else {
+            key_color = PianoChannelColors[pressed_channel % PIANO_NUM_CHANNELS_NES_MAX];
+        }
         int r = (key_color & 0xFF);
         int g = (key_color >> 8) & 0xFF;
         int b = (key_color >> 16) & 0xFF;
@@ -649,7 +655,13 @@ void PianoVisualizer::drawPianoRoll(const char* label, float width, float height
             auto [note_x, note_width] = getNoteX(note.midi_note);
             if (note_x < 0) continue;
             
-            ImU32 note_color = PianoChannelColors[note.channel];
+            // Select color based on mode
+            ImU32 note_color;
+            if (is_midi_mode_) {
+                note_color = MidiChannelColors[note.channel % PIANO_NUM_CHANNELS_MIDI];
+            } else {
+                note_color = PianoChannelColors[note.channel % PIANO_NUM_CHANNELS_NES_MAX];
+            }
             
             // Glow effect for notes about to be played
             bool about_to_play = (note.start_time <= current_time + 0.1f && note.start_time >= current_time);
@@ -714,12 +726,32 @@ void PianoVisualizer::drawPianoWindow(bool* p_open, float current_time) {
     }
     
     ImGui::SameLine(150);
-    for (int i = 0; i < getActiveChannelCount(); ++i) {
-        ImVec4 color = ImGui::ColorConvertU32ToFloat4(PianoChannelColors[i]);
-        ImGui::ColorButton(PianoChannelNames[i], color, ImGuiColorEditFlags_NoTooltip, ImVec2(16, 14));
+    if (is_midi_mode_) {
+        // Show MIDI channels legend (abbreviated, show used channels only)
+        ImGui::Text("MIDI:");
         ImGui::SameLine();
-        ImGui::Text("%s", PianoChannelNames[i]);
+        // Show first 10 channels as colored boxes
+        for (int i = 0; i < 10 && i < PIANO_NUM_CHANNELS_MIDI; ++i) {
+            ImVec4 color = ImGui::ColorConvertU32ToFloat4(MidiChannelColors[i]);
+            char label[8];
+            snprintf(label, sizeof(label), "%d", i + 1);
+            ImGui::ColorButton(label, color, ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Channel %d%s", i + 1, i == 9 ? " (Drums)" : "");
+            }
+            ImGui::SameLine();
+        }
+        ImGui::Text("...");
         ImGui::SameLine();
+    } else {
+        // Show NES channels legend
+        for (int i = 0; i < getActiveChannelCount(); ++i) {
+            ImVec4 color = ImGui::ColorConvertU32ToFloat4(PianoChannelColors[i]);
+            ImGui::ColorButton(PianoChannelNames[i], color, ImGuiColorEditFlags_NoTooltip, ImVec2(16, 14));
+            ImGui::SameLine();
+            ImGui::Text("%s", PianoChannelNames[i]);
+            ImGui::SameLine();
+        }
     }
     
     ImGui::SameLine(available_width - 280);
@@ -747,4 +779,211 @@ void PianoVisualizer::drawPianoWindow(bool* p_open, float current_time) {
     drawPianoKeyboard("##keyboard", available_width, keyboard_height);
     
     ImGui::End();
+}
+
+// MIDI support methods
+void PianoVisualizer::midiNoteOn(int channel, int note, float velocity, float current_time) {
+    if (channel < 0 || channel >= PIANO_NUM_CHANNELS_MIDI) return;
+    if (note < 0 || note > 127) return;
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Update current note display
+    current_notes_[channel] = {channel, note, velocity, true};
+    
+    // Track for preprocessing
+    midi_note_states_[channel][note].active = true;
+    midi_note_states_[channel][note].start_time = current_time;
+    midi_note_states_[channel][note].velocity = velocity;
+}
+
+void PianoVisualizer::midiNoteOff(int channel, int note, float current_time) {
+    if (channel < 0 || channel >= PIANO_NUM_CHANNELS_MIDI) return;
+    if (note < 0 || note > 127) return;
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    auto& state = midi_note_states_[channel][note];
+    if (state.active) {
+        // Create piano roll note
+        PianoRollNote roll_note;
+        roll_note.channel = channel;
+        roll_note.midi_note = note;
+        roll_note.velocity = state.velocity;
+        roll_note.start_time = state.start_time;
+        roll_note.end_time = current_time;
+        
+        if (roll_note.end_time - roll_note.start_time > 0.01f) {
+            preprocessed_notes_.push_back(roll_note);
+        }
+        
+        state.active = false;
+    }
+    
+    // Clear current note if it matches
+    if (current_notes_[channel].midi_note == note) {
+        current_notes_[channel].active = false;
+    }
+}
+
+void PianoVisualizer::midiAllNotesOff() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    for (int ch = 0; ch < PIANO_NUM_CHANNELS_MIDI; ++ch) {
+        for (int note = 0; note < 128; ++note) {
+            midi_note_states_[ch][note].active = false;
+        }
+        current_notes_[ch].active = false;
+    }
+}
+
+void PianoVisualizer::updateMidiTime(float current_time) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Update active notes display based on preprocessed data
+    // First, clear all current notes
+    for (int ch = 0; ch < PIANO_NUM_CHANNELS_MIDI; ++ch) {
+        current_notes_[ch].active = false;
+    }
+    
+    // Find notes that are active at current_time
+    for (const auto& note : preprocessed_notes_) {
+        if (note.start_time <= current_time && note.end_time > current_time) {
+            // This note is currently playing
+            int ch = note.channel;
+            if (ch >= 0 && ch < PIANO_NUM_CHANNELS_MIDI) {
+                // If channel already has a note, prefer the one with higher pitch or velocity
+                if (!current_notes_[ch].active || note.midi_note > current_notes_[ch].midi_note) {
+                    current_notes_[ch].channel = ch;
+                    current_notes_[ch].midi_note = note.midi_note;
+                    current_notes_[ch].velocity = note.velocity;
+                    current_notes_[ch].active = true;
+                }
+            }
+        }
+    }
+}
+
+void PianoVisualizer::preprocessMidi(const struct tml_message* midi_data) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Reset preprocessing state
+    preprocessed_notes_.clear();
+    for (int ch = 0; ch < PIANO_NUM_CHANNELS_MIDI; ++ch) {
+        for (int note = 0; note < 128; ++note) {
+            midi_note_states_[ch][note] = {false, 0.0f, 0.0f};
+        }
+        current_notes_[ch] = {ch, 0, 0.0f, false};
+    }
+    
+    if (!midi_data) {
+        has_preprocessed_data_ = false;
+        return;
+    }
+    
+    // Enable MIDI mode
+    is_midi_mode_ = true;
+    has_vrc6_ = false;
+    
+    // Process all MIDI messages
+    float max_time = 0.0f;
+    
+    for (const tml_message* msg = midi_data; msg; msg = msg->next) {
+        float current_time = msg->time / 1000.0f;  // Convert ms to seconds
+        
+        if (current_time > max_time) {
+            max_time = current_time;
+        }
+        
+        switch (msg->type) {
+            case TML_NOTE_ON:
+                if (msg->velocity > 0) {
+                    // Note On
+                    int ch = msg->channel;
+                    int note = msg->key;
+                    float velocity = msg->velocity / 127.0f;
+                    
+                    if (ch >= 0 && ch < PIANO_NUM_CHANNELS_MIDI && note >= 0 && note < 128) {
+                        midi_note_states_[ch][note].active = true;
+                        midi_note_states_[ch][note].start_time = current_time;
+                        midi_note_states_[ch][note].velocity = velocity;
+                    }
+                } else {
+                    // Note On with velocity 0 = Note Off
+                    int ch = msg->channel;
+                    int note = msg->key;
+                    
+                    if (ch >= 0 && ch < PIANO_NUM_CHANNELS_MIDI && note >= 0 && note < 128) {
+                        auto& state = midi_note_states_[ch][note];
+                        if (state.active) {
+                            PianoRollNote roll_note;
+                            roll_note.channel = ch;
+                            roll_note.midi_note = note;
+                            roll_note.velocity = state.velocity;
+                            roll_note.start_time = state.start_time;
+                            roll_note.end_time = current_time;
+                            
+                            if (roll_note.end_time - roll_note.start_time > 0.005f) {
+                                preprocessed_notes_.push_back(roll_note);
+                            }
+                            state.active = false;
+                        }
+                    }
+                }
+                break;
+                
+            case TML_NOTE_OFF: {
+                int ch = msg->channel;
+                int note = msg->key;
+                
+                if (ch >= 0 && ch < PIANO_NUM_CHANNELS_MIDI && note >= 0 && note < 128) {
+                    auto& state = midi_note_states_[ch][note];
+                    if (state.active) {
+                        PianoRollNote roll_note;
+                        roll_note.channel = ch;
+                        roll_note.midi_note = note;
+                        roll_note.velocity = state.velocity;
+                        roll_note.start_time = state.start_time;
+                        roll_note.end_time = current_time;
+                        
+                        if (roll_note.end_time - roll_note.start_time > 0.005f) {
+                            preprocessed_notes_.push_back(roll_note);
+                        }
+                        state.active = false;
+                    }
+                }
+                break;
+            }
+            
+            default:
+                break;
+        }
+    }
+    
+    // Close any remaining active notes
+    for (int ch = 0; ch < PIANO_NUM_CHANNELS_MIDI; ++ch) {
+        for (int note = 0; note < 128; ++note) {
+            auto& state = midi_note_states_[ch][note];
+            if (state.active) {
+                PianoRollNote roll_note;
+                roll_note.channel = ch;
+                roll_note.midi_note = note;
+                roll_note.velocity = state.velocity;
+                roll_note.start_time = state.start_time;
+                roll_note.end_time = max_time + 0.5f;  // Extend a bit
+                
+                preprocessed_notes_.push_back(roll_note);
+                state.active = false;
+            }
+        }
+    }
+    
+    // Sort by start time
+    std::sort(preprocessed_notes_.begin(), preprocessed_notes_.end(),
+              [](const PianoRollNote& a, const PianoRollNote& b) {
+                  return a.start_time < b.start_time;
+              });
+    
+    track_duration_ = max_time + 0.5f;
+    has_preprocessed_data_ = true;
 }

@@ -575,9 +575,13 @@ void load_nsf_file(const char* path) {
     // Initialize visualizer with new emulator
     state.visualizer.init(state.emu, state.sample_rate);
     
-    // Reset piano visualizer and preprocess
+    // Reset piano visualizer and switch to NES mode
     state.piano.reset();
+    state.piano.setMidiMode(false);  // Switch back to NES mode
     state.playback_time.store(0.0f);
+    
+    // Switch to NSF player mode
+    current_mode = AppMode::NSF_PLAYER;
     
     // Apply current settings
     gme_set_tempo(state.emu, state.tempo);
@@ -735,6 +739,10 @@ bool load_midi_file(const char* path) {
     current_mode = AppMode::MIDI_PLAYER;
     show_midi_player = true;
     
+    // Preprocess MIDI for piano roll
+    state.piano.preprocessMidi(midi_state.midi_file);
+    state.visualizer.reset();  // Reset NES visualizer
+    
     return true;
 }
 
@@ -745,6 +753,8 @@ void reset_midi_playback() {
     if (midi_state.soundfont) {
         tsf_reset(midi_state.soundfont);
     }
+    // Also update piano visualizer
+    state.piano.midiAllNotesOff();
 }
 
 // Draw NES Emulator window
@@ -1593,9 +1603,15 @@ void frame(void) {
     
     // Piano visualizer window
     if (show_piano) {
-        float current_time = (current_mode == AppMode::NES_EMULATOR) 
-            ? static_cast<float>(state.nes_emu.getCpuCycles()) / 1789773.0f
-            : state.playback_time.load();
+        float current_time;
+        if (current_mode == AppMode::NES_EMULATOR) {
+            current_time = static_cast<float>(state.nes_emu.getCpuCycles()) / 1789773.0f;
+        } else if (current_mode == AppMode::MIDI_PLAYER) {
+            current_time = static_cast<float>(midi_state.midi_time);
+            state.piano.updateMidiTime(current_time);  // Update active notes display
+        } else {
+            current_time = state.playback_time.load();
+        }
         state.piano.drawPianoWindow(&show_piano, current_time);
     }
     
