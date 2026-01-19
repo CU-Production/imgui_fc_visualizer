@@ -1,8 +1,4 @@
-#if defined(__APPLE__)
-#define SOKOL_METAL
-#else
-#define SOKOL_VULKAN
-#endif
+#define SOKOL_GLCORE
 #include "sokol_app.h"
 #include "sokol_gfx.h"
 #include "sokol_log.h"
@@ -34,6 +30,9 @@
 
 // NES Emulator
 #include "NesEmulator.h"
+
+// 2A03 Chip Visualizer
+#include "A2A03Visualizer.h"
 
 // TinySoundFont for MIDI playback
 #include "TinySoundFont/tsf.h"
@@ -151,6 +150,7 @@ static bool show_visualizer = true;
 static bool show_piano = true;
 static bool show_emulator = false;
 static bool show_midi_player = false;
+static bool show_chip_visualizer = false;
 
 // Application mode: NSF Player, NES Emulator, or MIDI Player
 enum class AppMode {
@@ -232,6 +232,9 @@ static struct {
     bool nes_rom_loaded = false;
     agnes_input_t nes_input = {};  // Current controller input
     float nes_screen_scale = 2.0f;
+    
+    // 2A03 Chip Visualizer
+    A2A03Visualizer chip_visualizer;
 } state;
 
 // Audio stream callback - called from audio thread
@@ -1200,6 +1203,9 @@ void init(void) {
     // Initialize NES Emulator
     state.nes_emu.init(state.sample_rate);
     
+    // Initialize 2A03 Chip Visualizer
+    state.chip_visualizer.init();
+    
     // Scan SoundFont folder
     scan_soundfont_folder();
     
@@ -1279,6 +1285,7 @@ void draw_player_window() {
         if (ImGui::BeginMenu("View")) {
             ImGui::MenuItem("Audio Visualizer", nullptr, &show_visualizer);
             ImGui::MenuItem("Piano Visualizer", nullptr, &show_piano);
+            ImGui::MenuItem("2A03 Chip Visualizer", nullptr, &show_chip_visualizer);
             ImGui::Separator();
             ImGui::MenuItem("ImGui Demo", nullptr, &show_demo_window);
             ImGui::EndMenu();
@@ -1615,6 +1622,28 @@ void frame(void) {
         state.piano.drawPianoWindow(&show_piano, current_time);
     }
     
+    // 2A03 Chip Visualizer window
+    if (show_chip_visualizer) {
+        // Update chip state from emulator if running
+        if (current_mode == AppMode::NES_EMULATOR && state.nes_emu.isRunning()) {
+            // Get CPU state from emulator (would need to add getCpuState method)
+            // For now, just update APU visualization
+            A2A03ApuState apu_state = {};
+            
+            // Get APU amplitudes from visualizer
+            // This is a simplified mapping - in a real implementation,
+            // we'd get the actual APU register values
+            apu_state.sq0_out = 8;  // Placeholder
+            apu_state.sq1_out = 8;
+            apu_state.tri_out = 8;
+            apu_state.noi_out = 4;
+            apu_state.pcm_out = 32;
+            
+            state.chip_visualizer.updateApuState(apu_state);
+        }
+        state.chip_visualizer.drawWindow(&show_chip_visualizer);
+    }
+    
     // ImGui demo window
     if (show_demo_window) {
         ImGui::ShowDemoWindow(&show_demo_window);
@@ -1661,6 +1690,9 @@ void cleanup(void) {
     
     // Cleanup Native File Dialog
     NFD_Quit();
+    
+    // Cleanup 2A03 Chip Visualizer
+    state.chip_visualizer.shutdown();
     
     simgui_shutdown();
     sg_shutdown();

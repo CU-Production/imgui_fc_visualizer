@@ -19,14 +19,20 @@ add_executable(imgui_fc_visualizer
     PianoVisualizer.h
     NesEmulator.cpp
     NesEmulator.h
+    A2A03Visualizer.cpp
+    A2A03Visualizer.h
+    # 2A03 chip data from v6502r
+    v6502r/src/2a03/segdefs.c
+    v6502r/src/2a03/nodenames.c
 )
 target_link_libraries(imgui_fc_visualizer PRIVATE sokol imgui game_music_emu agnes nfd TinySoundFont)
 target_compile_options(imgui_fc_visualizer PUBLIC $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<NOT:$<COMPILE_LANGUAGE:CUDA>>>:/wd4819>)
 
-# Include directories for gme headers
+# Include directories for gme headers and v6502r
 target_include_directories(imgui_fc_visualizer PRIVATE 
     ${CMAKE_SOURCE_DIR}/3rd_party/Game_Music_Emu
     ${CMAKE_SOURCE_DIR}/3rd_party
+    ${CMAKE_SOURCE_DIR}
 )
 
 if (NOT APPLE)
