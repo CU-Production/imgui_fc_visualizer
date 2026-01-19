@@ -1,0 +1,6 @@
+.vscode/
+.idea/
+.fibs/
+CMakeLists.txt
+CMakePresets.json
+__pycache__
