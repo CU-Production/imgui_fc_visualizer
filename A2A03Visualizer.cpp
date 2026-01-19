@@ -550,9 +550,11 @@ void A2A03Visualizer::drawWindow(bool* p_open) {
     render(avail.x, avail.y);
     
     // Display texture in ImGui
+    // Note: OpenGL texture origin is bottom-left, but ImGui expects top-left
+    // So we flip the V coordinates to correct the vertical orientation
     if (render_target_view_.id != SG_INVALID_ID) {
-        ImVec2 uv0(0, 0);
-        ImVec2 uv1(1, 1);
+        ImVec2 uv0(0, 1);  // Flip: top-left of image is at V=1
+        ImVec2 uv1(1, 0);  // Flip: bottom-right of image is at V=0
         
         // Get cursor position for mouse interaction
         ImVec2 pos = ImGui::GetCursorScreenPos();
