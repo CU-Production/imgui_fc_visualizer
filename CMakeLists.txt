@@ -4,6 +4,10 @@ project(imgui_fc_visualizer)
 set(CMAKE_CXX_STANDARD 20)
 
 add_subdirectory(3rd_party)
+# vulkan sdk on NON apple platform
+if (NOT APPLE)
+    find_package(Vulkan REQUIRED)
+endif ()
 
 # Main application with audio visualizer and NES emulator
 add_executable(imgui_fc_visualizer
@@ -24,3 +28,7 @@ target_include_directories(imgui_fc_visualizer PRIVATE
     ${CMAKE_SOURCE_DIR}/3rd_party/Game_Music_Emu
     ${CMAKE_SOURCE_DIR}/3rd_party
 )
+
+if (NOT APPLE)
+    target_link_libraries(imgui_fc_visualizer PRIVATE Vulkan::Vulkan)
+endif ()

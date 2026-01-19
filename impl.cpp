@@ -1,5 +1,9 @@
 #define SOKOL_IMPL
-#define SOKOL_GLCORE
+#if defined(__APPLE__)
+#define SOKOL_METAL
+#else
+#define SOKOL_VULKAN
+#endif
 #include "sokol_app.h"
 #include "sokol_gfx.h"
 #include "sokol_log.h"
