@@ -24,6 +24,9 @@ add_executable(imgui_fc_visualizer
     # 2A03 chip data from v6502r
     v6502r/src/2a03/segdefs.c
     v6502r/src/2a03/nodenames.c
+    # perfect2a03 transistor-level simulator
+    v6502r/ext/perfect6502/netlist_sim.c
+    v6502r/ext/perfect6502/perfect2a03.c
 )
 target_link_libraries(imgui_fc_visualizer PRIVATE sokol imgui game_music_emu agnes nfd TinySoundFont)
 target_compile_options(imgui_fc_visualizer PUBLIC $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<NOT:$<COMPILE_LANGUAGE:CUDA>>>:/wd4819>)
@@ -33,6 +36,7 @@ target_include_directories(imgui_fc_visualizer PRIVATE
     ${CMAKE_SOURCE_DIR}/3rd_party/Game_Music_Emu
     ${CMAKE_SOURCE_DIR}/3rd_party
     ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/v6502r/ext/perfect6502
 )
 
 if (NOT APPLE)

@@ -1624,8 +1624,13 @@ void frame(void) {
     
     // 2A03 Chip Visualizer window
     if (show_chip_visualizer) {
-        // Update chip state from emulator if running
-        if (current_mode == AppMode::NES_EMULATOR && state.nes_emu.isRunning()) {
+        // Step the transistor-level simulation each frame
+        // This runs perfect2a03 independently of the game emulation
+        if (state.chip_visualizer.isSimulationEnabled()) {
+            // Run the configured number of half-cycles per frame
+            state.chip_visualizer.stepSimulation();
+        } else if (current_mode == AppMode::NES_EMULATOR && state.nes_emu.isRunning()) {
+            // Fallback to register-only visualization from agnes
             state.chip_visualizer.updateFromEmulator(&state.nes_emu);
         }
         state.chip_visualizer.drawWindow(&show_chip_visualizer);

@@ -89,8 +89,20 @@ public:
     // Check if initialized
     bool isInitialized() const { return initialized_; }
     
-    // Update node states from emulator
+    // Update node states from emulator (register-level only)
     void updateFromEmulator(const NesEmulator* emu);
+    
+    // Update using perfect2a03 transistor-level simulation
+    // Steps the simulation and updates all node states
+    // If num_half_cycles is -1, uses the configured sim_cycles_per_frame_
+    void stepSimulation(int num_half_cycles = -1);
+    
+    // Reset the transistor simulation
+    void resetSimulation();
+    
+    // Check if transistor simulation is enabled
+    bool isSimulationEnabled() const { return sim_enabled_; }
+    void setSimulationEnabled(bool enabled) { sim_enabled_ = enabled; }
     
     // Manual state update (for custom mapping)
     void updateCpuState(const A2A03CpuState& cpu_state);
@@ -196,10 +208,18 @@ private:
     int node_noi_out_[4] = {-1};
     int node_pcm_out_[7] = {-1};
     
+    // Perfect2a03 transistor-level simulation
+    void* sim_state_ = nullptr;     // perfect2a03 state (opaque pointer)
+    bool sim_enabled_ = true;       // Enable transistor simulation
+    int sim_cycles_per_frame_ = 100; // Half-cycles to simulate per frame
+    
     // Helper methods
     void initNodeLookup();
     void cacheNodeIndices();
     void setNodeBits(const int* nodes, int count, uint32_t value);
     void updateRenderTarget(int width, int height);
     void renderChip();
+    void initSimulation();
+    void shutdownSimulation();
+    void updateNodeStatesFromSimulation();
 };

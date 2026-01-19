@@ -20,6 +20,8 @@ extern "C" {
 #include "v6502r/src/2a03/nodenames.h"
 #include "v6502r/src/2a03/nodegroups.h"
 #include "v6502r/src/2a03/segdefs.h"
+// Perfect2a03 transistor-level simulator
+#include "perfect2a03.h"
 }
 
 // Node state values
@@ -223,6 +225,9 @@ bool A2A03Visualizer::init() {
     initNodeLookup();
     cacheNodeIndices();
     
+    // Initialize perfect2a03 transistor simulation
+    initSimulation();
+    
     initialized_ = true;
     return true;
 }
@@ -248,6 +253,9 @@ void A2A03Visualizer::shutdown() {
     if (color_attachment_view_.id != SG_INVALID_ID) sg_destroy_view(color_attachment_view_);
     if (render_target_.id != SG_INVALID_ID) sg_destroy_image(render_target_);
     if (render_sampler_.id != SG_INVALID_ID) sg_destroy_sampler(render_sampler_);
+    
+    // Shutdown perfect2a03 simulation
+    shutdownSimulation();
     
     initialized_ = false;
 }
@@ -529,6 +537,18 @@ void A2A03Visualizer::drawWindow(bool* p_open) {
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Simulation")) {
+            if (ImGui::MenuItem("Enable Transistor Sim", nullptr, sim_enabled_)) {
+                sim_enabled_ = !sim_enabled_;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reset Simulation")) {
+                resetSimulation();
+            }
+            ImGui::Separator();
+            ImGui::SliderInt("Cycles/Frame", &sim_cycles_per_frame_, 10, 1000);
+            ImGui::EndMenu();
+        }
         ImGui::EndMenuBar();
     }
     
@@ -655,4 +675,63 @@ int A2A03Visualizer::findNodeByName(const char* name) const {
         return it->second;
     }
     return -1;
+}
+
+//------------------------------------------------------------------------------
+// Perfect2a03 Transistor-Level Simulation
+//------------------------------------------------------------------------------
+
+void A2A03Visualizer::initSimulation() {
+    if (sim_state_) return;
+    
+    // Initialize perfect2a03 chip simulation
+    sim_state_ = cpu_initAndResetChip();
+    if (sim_state_) {
+        // Run a few cycles to stabilize the chip after reset
+        for (int i = 0; i < 20; ++i) {
+            cpu_step(sim_state_);
+        }
+    }
+}
+
+void A2A03Visualizer::shutdownSimulation() {
+    if (sim_state_) {
+        cpu_destroyChip(sim_state_);
+        sim_state_ = nullptr;
+    }
+}
+
+void A2A03Visualizer::resetSimulation() {
+    shutdownSimulation();
+    initSimulation();
+}
+
+void A2A03Visualizer::stepSimulation(int num_half_cycles) {
+    if (!sim_state_ || !sim_enabled_) return;
+    
+    // Use configured value if -1 passed
+    int cycles = (num_half_cycles < 0) ? sim_cycles_per_frame_ : num_half_cycles;
+    
+    // Execute the specified number of half-cycles
+    for (int i = 0; i < cycles; ++i) {
+        cpu_step(sim_state_);
+    }
+    
+    // Update visualization from simulation state
+    updateNodeStatesFromSimulation();
+}
+
+void A2A03Visualizer::updateNodeStatesFromSimulation() {
+    if (!sim_state_) return;
+    
+    // Read all node states from perfect2a03 into the visualization buffer
+    // cpu_read_node_state_as_bytes writes active_value for HIGH nodes, 
+    // inactive_value for LOW nodes
+    cpu_read_node_state_as_bytes(
+        sim_state_,
+        NODE_ACTIVE,      // Value for active (HIGH) nodes
+        NODE_INACTIVE,    // Value for inactive (LOW) nodes
+        node_states_,
+        A2A03_MAX_NODES
+    );
 }
