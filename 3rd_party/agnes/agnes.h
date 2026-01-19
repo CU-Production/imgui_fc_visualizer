@@ -92,6 +92,19 @@ void agnes_set_apu_handler(agnes_t *agnes,
 // Get current CPU cycle count (for APU synchronization)
 uint64_t agnes_get_cpu_cycles(const agnes_t *agnes);
 
+// CPU state structure for external visualization
+typedef struct agnes_cpu_state {
+    uint8_t a;      // Accumulator
+    uint8_t x;      // X register
+    uint8_t y;      // Y register
+    uint8_t sp;     // Stack pointer
+    uint8_t p;      // Status register (flags)
+    uint16_t pc;    // Program counter
+} agnes_cpu_state_t;
+
+// Get current CPU state
+void agnes_get_cpu_state(const agnes_t *agnes, agnes_cpu_state_t *out_state);
+
 #ifdef __cplusplus
 }
 #endif

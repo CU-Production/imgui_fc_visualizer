@@ -60,6 +60,27 @@ public:
     uint64_t getCpuCycles() const;
     int getCurrentScanline() const;
     
+    // CPU state for visualization
+    struct CpuState {
+        uint8_t a;      // Accumulator
+        uint8_t x;      // X register
+        uint8_t y;      // Y register
+        uint8_t sp;     // Stack pointer
+        uint8_t p;      // Status register
+        uint16_t pc;    // Program counter
+    };
+    CpuState getCpuState() const;
+    
+    // APU state for visualization
+    struct ApuState {
+        uint8_t sq0_out;    // Square 1 output (0-15)
+        uint8_t sq1_out;    // Square 2 output (0-15)
+        uint8_t tri_out;    // Triangle output (0-15)
+        uint8_t noi_out;    // Noise output (0-15)
+        uint8_t pcm_out;    // DMC/PCM output (0-127)
+    };
+    ApuState getApuState() const;
+    
     // Save/Load state
     bool saveState(std::vector<uint8_t>& out_state);
     bool loadState(const std::vector<uint8_t>& state);

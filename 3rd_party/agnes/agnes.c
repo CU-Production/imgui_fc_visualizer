@@ -572,6 +572,16 @@ uint64_t agnes_get_cpu_cycles(const agnes_t *agnes) {
     return agnes->cpu.cycles;
 }
 
+void agnes_get_cpu_state(const agnes_t *agnes, agnes_cpu_state_t *out_state) {
+    if (!agnes || !out_state) return;
+    out_state->a = agnes->cpu.acc;
+    out_state->x = agnes->cpu.x;
+    out_state->y = agnes->cpu.y;
+    out_state->sp = agnes->cpu.sp;
+    out_state->pc = agnes->cpu.pc;
+    out_state->p = cpu_get_flags(&agnes->cpu);
+}
+
 // Forward declaration for mapper24 CPU cycle (needed for IRQ)
 static void mapper24_cpu_cycle(mapper24_t *mapper);
 

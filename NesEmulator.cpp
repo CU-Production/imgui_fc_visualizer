@@ -388,6 +388,35 @@ int NesEmulator::getCurrentScanline() const {
     return 0;
 }
 
+NesEmulator::CpuState NesEmulator::getCpuState() const {
+    CpuState state = {};
+    if (agnes_) {
+        agnes_cpu_state_t agnes_state;
+        agnes_get_cpu_state(agnes_, &agnes_state);
+        state.a = agnes_state.a;
+        state.x = agnes_state.x;
+        state.y = agnes_state.y;
+        state.sp = agnes_state.sp;
+        state.p = agnes_state.p;
+        state.pc = agnes_state.pc;
+    }
+    return state;
+}
+
+NesEmulator::ApuState NesEmulator::getApuState() const {
+    ApuState state = {};
+    // Get APU output levels using osc_amplitude
+    // Note: osc_amplitude returns values in different ranges for different channels
+    // Square: 0-15, Triangle: 0-15, Noise: 0-15, DMC: 0-127
+    state.sq0_out = static_cast<uint8_t>(std::abs(apu_.osc_amplitude(0)) & 0x0F);
+    state.sq1_out = static_cast<uint8_t>(std::abs(apu_.osc_amplitude(1)) & 0x0F);
+    state.tri_out = static_cast<uint8_t>(std::abs(apu_.osc_amplitude(2)) & 0x0F);
+    state.noi_out = static_cast<uint8_t>(std::abs(apu_.osc_amplitude(3)) & 0x0F);
+    state.pcm_out = static_cast<uint8_t>(std::abs(apu_.osc_amplitude(4)) & 0x7F);
+    
+    return state;
+}
+
 bool NesEmulator::saveState(std::vector<uint8_t>& out_state) {
     if (!agnes_ || !rom_loaded_) return false;
     
