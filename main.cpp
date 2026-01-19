@@ -1626,29 +1626,7 @@ void frame(void) {
     if (show_chip_visualizer) {
         // Update chip state from emulator if running
         if (current_mode == AppMode::NES_EMULATOR && state.nes_emu.isRunning()) {
-            // Get CPU state from emulator
-            auto emu_cpu_state = state.nes_emu.getCpuState();
-            A2A03CpuState cpu_state = {};
-            cpu_state.a = emu_cpu_state.a;
-            cpu_state.x = emu_cpu_state.x;
-            cpu_state.y = emu_cpu_state.y;
-            cpu_state.sp = emu_cpu_state.sp;
-            cpu_state.p = emu_cpu_state.p;
-            cpu_state.pc = emu_cpu_state.pc;
-            cpu_state.addr = emu_cpu_state.pc;  // Use PC as current address
-            cpu_state.data = 0;
-            cpu_state.rw = true;
-            state.chip_visualizer.updateCpuState(cpu_state);
-            
-            // Get APU state from emulator
-            auto emu_apu_state = state.nes_emu.getApuState();
-            A2A03ApuState apu_state = {};
-            apu_state.sq0_out = emu_apu_state.sq0_out;
-            apu_state.sq1_out = emu_apu_state.sq1_out;
-            apu_state.tri_out = emu_apu_state.tri_out;
-            apu_state.noi_out = emu_apu_state.noi_out;
-            apu_state.pcm_out = emu_apu_state.pcm_out;
-            state.chip_visualizer.updateApuState(apu_state);
+            state.chip_visualizer.updateFromEmulator(&state.nes_emu);
         }
         state.chip_visualizer.drawWindow(&show_chip_visualizer);
     }

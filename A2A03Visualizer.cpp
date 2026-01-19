@@ -302,29 +302,41 @@ void A2A03Visualizer::setNodeBits(const int* nodes, int count, uint32_t value) {
 void A2A03Visualizer::updateFromEmulator(const NesEmulator* emu) {
     if (!emu || !initialized_) return;
     
-    // Get CPU state from emulator
-    // Note: This requires NesEmulator to expose CPU state
-    // For now, we'll use placeholder values
-    
-    // Reset all nodes to inactive
+    // Reset all nodes to inactive first
     memset(node_states_, NODE_INACTIVE, sizeof(node_states_));
     
-    // TODO: Get actual CPU state from agnes emulator
-    // This would require adding methods to NesEmulator to expose:
-    // - CPU registers (A, X, Y, SP, P, PC)
-    // - Address/data bus state
-    // - APU channel outputs
+    // Get CPU state from emulator
+    NesEmulator::CpuState emu_cpu = emu->getCpuState();
+    A2A03CpuState cpu_state = {};
+    cpu_state.a = emu_cpu.a;
+    cpu_state.x = emu_cpu.x;
+    cpu_state.y = emu_cpu.y;
+    cpu_state.sp = emu_cpu.sp;
+    cpu_state.p = emu_cpu.p;
+    cpu_state.pc = emu_cpu.pc;
+    cpu_state.addr = emu_cpu.pc;  // Use PC as current address bus value
+    cpu_state.data = 0;           // Data bus not easily accessible
+    cpu_state.rw = true;          // Assume read
     
-    // For demonstration, set some nodes active based on APU state
-    int periods[5], lengths[5], amplitudes[5];
-    // emu->getAPUState(periods, lengths, amplitudes);  // Would need this method
+    // Update CPU register nodes
+    setNodeBits(node_a_, 8, cpu_state.a);
+    setNodeBits(node_x_, 8, cpu_state.x);
+    setNodeBits(node_y_, 8, cpu_state.y);
+    setNodeBits(node_sp_, 8, cpu_state.sp);
+    setNodeBits(node_p_, 8, cpu_state.p);
+    setNodeBits(node_pcl_, 8, cpu_state.pc & 0xFF);
+    setNodeBits(node_pch_, 8, (cpu_state.pc >> 8) & 0xFF);
+    setNodeBits(node_ab_, 16, cpu_state.addr);
     
-    // Update APU output nodes based on channel amplitudes
-    // setNodeBits(node_sq0_out_, 4, amplitudes[0] & 0xF);
-    // setNodeBits(node_sq1_out_, 4, amplitudes[1] & 0xF);
-    // setNodeBits(node_tri_out_, 4, amplitudes[2] & 0xF);
-    // setNodeBits(node_noi_out_, 4, amplitudes[3] & 0xF);
-    // setNodeBits(node_pcm_out_, 7, amplitudes[4] & 0x7F);
+    // Get APU state from emulator
+    NesEmulator::ApuState emu_apu = emu->getApuState();
+    
+    // Update APU output nodes
+    setNodeBits(node_sq0_out_, 4, emu_apu.sq0_out);
+    setNodeBits(node_sq1_out_, 4, emu_apu.sq1_out);
+    setNodeBits(node_tri_out_, 4, emu_apu.tri_out);
+    setNodeBits(node_noi_out_, 4, emu_apu.noi_out);
+    setNodeBits(node_pcm_out_, 7, emu_apu.pcm_out);
 }
 
 void A2A03Visualizer::updateCpuState(const A2A03CpuState& cpu) {
