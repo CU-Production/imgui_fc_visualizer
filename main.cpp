@@ -1437,6 +1437,33 @@ void init(void) {
     if (!font) {
         font = io.Fonts->AddFontDefault();
     }
+#elif defined(EMSCRIPTEN_PLATFORM)
+    // On Emscripten/HTML5, load font from virtual filesystem
+    // Font files should be preloaded in HTML (see index.html)
+    const char* font_paths[] = {
+        "/fonts/NotoSansCJK-Regular.ttc",
+        "/fonts/NotoSans-Regular.ttf",
+        "/fonts/Roboto-Regular.ttf",
+        "/fonts/DejaVuSans.ttf",
+    };
+
+    for (const char* font_path : font_paths) {
+        FILE* test_file = fopen(font_path, "rb");
+        if (test_file) {
+            fclose(test_file);
+            font = io.Fonts->AddFontFromFileTTF(font_path, 16.0f, nullptr, custom_ranges);
+            if (font) {
+                break;
+            }
+        }
+    }
+
+    // Fallback: try to load from memory if font file is available
+    if (!font) {
+        // Try loading a common web font that might be embedded
+        // For now, use default font as fallback
+        font = io.Fonts->AddFontDefault();
+    }
 #else
     // On Linux/Mac, try common font paths
     const char* font_paths[] = {

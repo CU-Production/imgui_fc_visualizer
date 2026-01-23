@@ -77,6 +77,85 @@
             // TOTAL_MEMORY: 67108864,  // 64MB
         };
         
+        // Preload font files into Emscripten virtual filesystem
+        function preloadFonts() {
+            // List of font files to preload (you can add your preferred fonts here)
+            // Common free fonts that support CJK:
+            // - Noto Sans CJK: https://www.google.com/get/noto/
+            // - Source Han Sans: https://github.com/adobe-fonts/source-han-sans
+            var fontFiles = [
+                // Add your font files here, e.g.:
+                'fonts/NotoSansCJK-Regular.ttc',
+                // 'fonts/Roboto-Regular.ttf',
+            ];
+            
+            if (fontFiles.length === 0) {
+                console.log('No font files to preload');
+                return;
+            }
+            
+            var loadedCount = 0;
+            var totalFiles = fontFiles.length;
+            
+            function loadNextFont() {
+                if (loadedCount >= totalFiles) {
+                    console.log('All font files preloaded');
+                    return;
+                }
+                
+                var filePath = fontFiles[loadedCount];
+                var fileName = filePath.substring(filePath.lastIndexOf('/') + 1);
+                
+                var xhr = new XMLHttpRequest();
+                xhr.open('GET', filePath, true);
+                xhr.responseType = 'arraybuffer';
+                
+                xhr.onload = function() {
+                    if (xhr.status === 200 || xhr.status === 0) {
+                        try {
+                            // Ensure /fonts directory exists
+                            try {
+                                Module.FS.mkdir('/fonts');
+                            } catch (err) {
+                                // Directory might already exist, ignore
+                            }
+                            
+                            // Write file to virtual filesystem
+                            var data = new Uint8Array(xhr.response);
+                            Module.FS.writeFile('/fonts/' + fileName, data);
+                            console.log('Preloaded font:', fileName);
+                        } catch (err) {
+                            console.error('Error writing font file:', fileName, err);
+                        }
+                    } else {
+                        console.warn('Failed to load font file:', filePath, 'Status:', xhr.status);
+                    }
+                    
+                    loadedCount++;
+                    loadNextFont();
+                };
+                
+                xhr.onerror = function() {
+                    console.error('Error loading font file:', filePath);
+                    loadedCount++;
+                    loadNextFont();
+                };
+                
+                xhr.send();
+            }
+            
+            if (typeof Module !== 'undefined' && Module.FS) {
+                loadNextFont();
+            } else {
+                var checkModule = setInterval(function() {
+                    if (typeof Module !== 'undefined' && Module.FS) {
+                        clearInterval(checkModule);
+                        loadNextFont();
+                    }
+                }, 100);
+            }
+        }
+        
         // Preload SoundFont files into Emscripten virtual filesystem
         function preloadSoundFonts() {
             // List of SoundFont files to preload
@@ -151,9 +230,10 @@
             }
         }
         
-        // Preload SoundFonts when Module is ready
+        // Preload fonts and SoundFonts when Module is ready
         Module.postRun = Module.postRun || [];
         Module.postRun.push(function() {
+            preloadFonts();
             preloadSoundFonts();
         });
         
