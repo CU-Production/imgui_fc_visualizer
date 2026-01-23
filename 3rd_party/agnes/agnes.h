@@ -105,6 +105,11 @@ typedef struct agnes_cpu_state {
 // Get current CPU state
 void agnes_get_cpu_state(const agnes_t *agnes, agnes_cpu_state_t *out_state);
 
+// Read ROM data at address (for perfect2a03 instruction fetching)
+// This reads through the mapper without side effects
+// Returns the byte at the given address, or 0 if address is invalid
+uint8_t agnes_read_rom_byte(const agnes_t *agnes, uint16_t addr);
+
 #ifdef __cplusplus
 }
 #endif

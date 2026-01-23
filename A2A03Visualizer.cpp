@@ -230,6 +230,17 @@ void A2A03Visualizer::setNodeBits(const int* nodes, int count, uint32_t value) {
     }
 }
 
+void A2A03Visualizer::setPerfect2a03NodeBits(const int* nodes, int count, uint32_t value) {
+    if (!sim_state_) return;
+    
+    for (int i = 0; i < count; ++i) {
+        if (nodes[i] >= 0) {
+            bool high = (value & (1 << i)) != 0;
+            cpu_write_node(sim_state_, nodes[i], high);
+        }
+    }
+}
+
 void A2A03Visualizer::updateFromEmulator(const NesEmulator* emu) {
     if (!emu || !initialized_) return;
     
@@ -249,7 +260,7 @@ void A2A03Visualizer::updateFromEmulator(const NesEmulator* emu) {
     cpu_state.data = 0;           // Data bus not easily accessible
     cpu_state.rw = true;          // Assume read
     
-    // Update CPU register nodes
+    // Update CPU register nodes (for visualization)
     setNodeBits(node_a_, 8, cpu_state.a);
     setNodeBits(node_x_, 8, cpu_state.x);
     setNodeBits(node_y_, 8, cpu_state.y);
@@ -258,6 +269,57 @@ void A2A03Visualizer::updateFromEmulator(const NesEmulator* emu) {
     setNodeBits(node_pcl_, 8, cpu_state.pc & 0xFF);
     setNodeBits(node_pch_, 8, (cpu_state.pc >> 8) & 0xFF);
     setNodeBits(node_ab_, 16, cpu_state.addr);
+    
+    // If perfect2a03 simulation is enabled, sync registers and execute instructions
+    // Only do this if the emulator is running and has a ROM loaded
+    if (sim_state_ && sim_enabled_ && emu->isRunning() && emu->isLoaded()) {
+        // 1. Update perfect2a03 registers from emulator state
+        setPerfect2a03NodeBits(node_a_, 8, cpu_state.a);
+        setPerfect2a03NodeBits(node_x_, 8, cpu_state.x);
+        setPerfect2a03NodeBits(node_y_, 8, cpu_state.y);
+        setPerfect2a03NodeBits(node_sp_, 8, cpu_state.sp);
+        
+        // P register: note that p5 is skipped (node_p_[5] should be -1 or 0)
+        // From perfect2a03.c: p0,p1,p2,p3,p4,0,p6,p7
+        for (int i = 0; i < 8; ++i) {
+            if (i == 5) continue;  // Skip p5 (it's always 0 in perfect2a03)
+            if (node_p_[i] >= 0) {
+                bool high = (cpu_state.p & (1 << i)) != 0;
+                cpu_write_node(sim_state_, node_p_[i], high);
+            }
+        }
+        
+        setPerfect2a03NodeBits(node_pcl_, 8, cpu_state.pc & 0xFF);
+        setPerfect2a03NodeBits(node_pch_, 8, (cpu_state.pc >> 8) & 0xFF);
+        setPerfect2a03NodeBits(node_ab_, 16, cpu_state.addr);
+        
+        // 2. Get instruction bytes from agnes (fetch up to 3 instructions, max 9 bytes)
+        extern uint8_t cpu_memory[65536];  // perfect2a03's global memory array
+        
+        uint16_t pc = cpu_state.pc;
+        const int max_bytes = 9;  // 3 instructions * 3 bytes max
+        
+        // Fetch instruction bytes from agnes and place them in cpu_memory
+        for (int i = 0; i < max_bytes; ++i) {
+            uint16_t addr = pc + i;
+            if (addr <= 0xFFFF) {
+                cpu_memory[addr] = emu->readRomByte(addr);
+            } else {
+                cpu_memory[addr] = 0;
+            }
+        }
+        
+        // 3. Execute a few half-cycles to let perfect2a03 process the instructions
+        // Execute enough cycles for at least one instruction (typically 2-7 cycles = 4-14 half-cycles)
+        // Let's execute about 20 half-cycles to cover a few instructions
+        const int half_cycles_to_execute = 20;
+        for (int i = 0; i < half_cycles_to_execute; ++i) {
+            cpu_step(sim_state_);
+        }
+        
+        // 4. Update visualization from perfect2a03 simulation state
+        updateNodeStatesFromSimulation();
+    }
     
     // Get APU state from emulator
     NesEmulator::ApuState emu_apu = emu->getApuState();

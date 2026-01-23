@@ -84,6 +84,10 @@ public:
     // Save/Load state
     bool saveState(std::vector<uint8_t>& out_state);
     bool loadState(const std::vector<uint8_t>& state);
+    
+    // Read ROM byte at address (for perfect2a03 instruction fetching)
+    // Returns the byte at the given address, or 0 if address is invalid or not ROM area
+    uint8_t readRomByte(uint16_t addr) const;
 
 private:
     // Agnes (CPU/PPU/Mappers)
@@ -118,7 +122,7 @@ private:
     agnes_input_t input_[2] = {};
     
     // Thread safety
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     
     // APU callback functions (static, called by agnes)
     static void apuWriteCallback(void* user_data, uint16_t addr, uint8_t val, uint64_t cpu_cycle);

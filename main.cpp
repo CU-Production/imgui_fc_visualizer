@@ -1628,7 +1628,10 @@ void frame(void) {
         // This runs perfect2a03 independently of the game emulation
         if (state.chip_visualizer.isSimulationEnabled()) {
             // Run the configured number of half-cycles per frame
-            state.chip_visualizer.stepSimulation();
+            if (current_mode == AppMode::NES_EMULATOR && state.nes_emu.isRunning()) {
+                state.chip_visualizer.updateFromEmulator(&state.nes_emu);
+                state.chip_visualizer.stepSimulation();
+            }
         } else if (current_mode == AppMode::NES_EMULATOR && state.nes_emu.isRunning()) {
             // Fallback to register-only visualization from agnes
             state.chip_visualizer.updateFromEmulator(&state.nes_emu);

@@ -437,3 +437,11 @@ bool NesEmulator::loadState(const std::vector<uint8_t>& state) {
     
     return agnes_restore_state(agnes_, reinterpret_cast<const agnes_state_t*>(state.data()));
 }
+
+uint8_t NesEmulator::readRomByte(uint16_t addr) const {
+    if (!agnes_ || !rom_loaded_) return 0;
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    return agnes_read_rom_byte(agnes_, addr);
+}

@@ -582,6 +582,16 @@ void agnes_get_cpu_state(const agnes_t *agnes, agnes_cpu_state_t *out_state) {
     out_state->p = cpu_get_flags(&agnes->cpu);
 }
 
+uint8_t agnes_read_rom_byte(const agnes_t *agnes, uint16_t addr) {
+    if (!agnes) return 0;
+    // Only read from ROM area (0x8000-0xFFFF) to avoid side effects
+    // For other addresses, return 0
+    if (addr >= 0x8000 && addr <= 0xFFFF) {
+        return mapper_read((agnes_t*)agnes, addr);
+    }
+    return 0;
+}
+
 // Forward declaration for mapper24 CPU cycle (needed for IRQ)
 static void mapper24_cpu_cycle(mapper24_t *mapper);
 

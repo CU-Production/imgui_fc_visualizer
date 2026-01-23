@@ -217,6 +217,7 @@ private:
     void initNodeLookup();
     void cacheNodeIndices();
     void setNodeBits(const int* nodes, int count, uint32_t value);
+    void setPerfect2a03NodeBits(const int* nodes, int count, uint32_t value);
     void updateRenderTarget(int width, int height);
     void renderChip();
     void initSimulation();
