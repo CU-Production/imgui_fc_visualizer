@@ -1458,6 +1458,38 @@ void init(void) {
         }
     }
 
+    // Merge symbol font for media control icons (⏮⏭⏸⏹▶)
+    if (font) {
+        ImFontConfig config;
+        config.MergeMode = true;
+        config.GlyphMinAdvanceX = 16.0f;
+        config.PixelSnapH = true;
+        
+        // Try to find a font that contains media control symbols
+        // These symbols are in U+23E0-U+23FF (Miscellaneous Technical) and U+25A0-U+25FF (Geometric Shapes)
+        const char* symbol_font_paths[] = {
+            "/fonts/SegoeUISymbol.ttf",           // Segoe UI Symbol (if available)
+            "/fonts/NotoSansSymbols-Regular.ttf", // Noto Symbols
+            "/fonts/NotoSansSymbols2-Regular.ttf", // Noto Symbols 2
+            "/fonts/NotoSansMono-Regular.ttf",     // Noto Sans Mono (may have some symbols)
+        };
+        
+        static const ImWchar symbol_ranges[] = {
+            0x2300, 0x23FF, // Miscellaneous Technical (contains ⏮⏭⏸⏹)
+            0x25A0, 0x25FF, // Geometric Shapes (contains ▶■)
+            0,
+        };
+        
+        for (const char* symbol_path : symbol_font_paths) {
+            FILE* test_file = fopen(symbol_path, "rb");
+            if (test_file) {
+                fclose(test_file);
+                io.Fonts->AddFontFromFileTTF(symbol_path, 16.0f, &config, symbol_ranges);
+                break;  // Successfully merged, no need to try others
+            }
+        }
+    }
+
     // Fallback: try to load from memory if font file is available
     if (!font) {
         // Try loading a common web font that might be embedded
