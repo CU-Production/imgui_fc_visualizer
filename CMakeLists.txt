@@ -3,9 +3,11 @@ project(imgui_fc_visualizer)
 
 set(CMAKE_CXX_STANDARD 20)
 
+set(CMAKE_TOOLCHAIN_FILE "E:/SW/html5/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake")
+
 add_subdirectory(3rd_party)
 # vulkan sdk on NON apple platform
-if (NOT APPLE)
+if (NOT APPLE AND NOT EMSCRIPTEN)
     find_package(Vulkan REQUIRED)
 endif ()
 
@@ -28,8 +30,25 @@ add_executable(imgui_fc_visualizer
     v6502r/ext/perfect6502/netlist_sim.c
     v6502r/ext/perfect6502/perfect2a03.c
 )
-target_link_libraries(imgui_fc_visualizer PRIVATE sokol imgui game_music_emu agnes nfd TinySoundFont)
+# Link libraries - conditionally include nfd
+if (EMSCRIPTEN)
+    target_link_libraries(imgui_fc_visualizer PRIVATE sokol imgui game_music_emu agnes TinySoundFont)
+    # Define preprocessor macro for Web platform
+    target_compile_definitions(imgui_fc_visualizer PRIVATE EMSCRIPTEN_PLATFORM)
+    target_compile_options(imgui_fc_visualizer PRIVATE --use-port=emdawnwebgpu)
+else()
+    target_link_libraries(imgui_fc_visualizer PRIVATE sokol imgui game_music_emu agnes nfd TinySoundFont)
+endif()
 target_compile_options(imgui_fc_visualizer PUBLIC $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<NOT:$<COMPILE_LANGUAGE:CUDA>>>:/wd4819>)
+
+if (EMSCRIPTEN)
+    target_compile_options(imgui_fc_visualizer PRIVATE -pthread -Oz --closure 1)
+    target_link_libraries(imgui_fc_visualizer PRIVATE
+        -sUSE_PTHREADS=1
+        -sPTHREAD_POOL_SIZE=4
+        -sOFFSCREENCANVAS_SUPPORT
+        --use-port=emdawnwebgpu)  # Enable WebGL2 support for SOKOL_GLES3
+endif ()
 
 # Include directories for gme headers and v6502r
 target_include_directories(imgui_fc_visualizer PRIVATE 
@@ -39,7 +58,7 @@ target_include_directories(imgui_fc_visualizer PRIVATE
     ${CMAKE_SOURCE_DIR}/v6502r/ext/perfect6502
 )
 
-if (NOT APPLE)
+if (NOT APPLE AND NOT EMSCRIPTEN)
     target_link_libraries(imgui_fc_visualizer PRIVATE Vulkan::Vulkan)
 endif ()
 

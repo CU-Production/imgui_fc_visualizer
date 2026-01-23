@@ -73,8 +73,10 @@ add_library(agnes STATIC
 )
 target_include_directories(agnes PUBLIC agnes)
 
-# nfd
-add_subdirectory(nativefiledialog-extended)
+# nfd - skip on Emscripten (Web platform doesn't support native file dialogs)
+if (NOT EMSCRIPTEN)
+    add_subdirectory(nativefiledialog-extended)
+endif()
 
 # TinySoundFont
 add_library(TinySoundFont INTERFACE)

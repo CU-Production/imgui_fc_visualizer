@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------
 
 // sokol_imgui.h needs these to be defined before inclusion
-#define SOKOL_GLCORE
+#define SOKOL_WGPU
 #include "sokol_app.h"
 #include "sokol_gfx.h"
 #include "util/sokol_imgui.h"

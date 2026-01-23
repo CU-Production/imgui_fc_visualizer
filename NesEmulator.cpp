@@ -281,7 +281,7 @@ int NesEmulator::readAudioSamples(short* buffer, int max_samples) {
     long available = apu_buffer_.samples_avail();
     if (available <= 0) return 0;
     
-    int to_read = min(static_cast<int>(available), max_samples);
+    int to_read = fmin(static_cast<int>(available), max_samples);
     return static_cast<int>(apu_buffer_.read_samples(buffer, to_read));
 }
 

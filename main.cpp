@@ -1,4 +1,4 @@
-#define SOKOL_GLCORE
+#define SOKOL_WGPU
 #include "sokol_app.h"
 #include "sokol_gfx.h"
 #include "sokol_log.h"
@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <mutex>
 #include <atomic>
+#include <functional>
 
 #include "imgui.h"
 #include "util/sokol_imgui.h"
@@ -19,8 +20,161 @@
 #include "gme/Nes_Apu.h"
 #include "gme/Nes_Vrc6_Apu.h"
 
-// Native File Dialog for file selection
+// Native File Dialog for file selection (not available on Emscripten)
+#ifdef EMSCRIPTEN_PLATFORM
+// For Emscripten, we'll use browser file input via JavaScript
+#include <emscripten.h>
+#include <string>
+#include <cstring>
+#include <cstdio>
+
+// Emscripten file dialog wrapper - simplified version
+// Store selected file path (saved to Emscripten virtual filesystem)
+static char* g_selected_file_path = nullptr;
+static bool g_file_selection_pending = false;
+static std::function<void(const char*)> g_file_selection_callback = nullptr;
+
+extern "C" {
+    // Called from JavaScript when file is selected
+    EMSCRIPTEN_KEEPALIVE void emscripten_file_selected(const char* filename, uint8_t* data, int data_len) {
+        if (filename && data && data_len > 0) {
+            // Free previous path if any
+            if (g_selected_file_path) {
+                free(g_selected_file_path);
+                g_selected_file_path = nullptr;
+            }
+            
+            // Save file to Emscripten's virtual filesystem
+            std::string filepath = "/tmp/";
+            filepath += filename;
+            FILE* f = fopen(filepath.c_str(), "wb");
+            if (f) {
+                fwrite(data, 1, data_len, f);
+                fclose(f);
+                
+                // Store the path
+                g_selected_file_path = (char*)malloc(filepath.length() + 1);
+                strcpy(g_selected_file_path, filepath.c_str());
+                g_file_selection_pending = true;
+            }
+        }
+    }
+    
+    // Check if file was selected (called from main loop)
+    EMSCRIPTEN_KEEPALIVE const char* emscripten_check_file_selection() {
+        if (g_file_selection_pending && g_selected_file_path) {
+            g_file_selection_pending = false;
+            return g_selected_file_path;
+        }
+        return nullptr;
+    }
+}
+
+// Simple wrapper for NFD_OpenDialogU8 on Emscripten
+enum nfdresult_t {
+    NFD_ERROR = 0,
+    NFD_OKAY = 1,
+    NFD_CANCEL = 2
+};
+
+typedef char nfdu8char_t;
+typedef struct {
+    const char* name;
+    const char* spec;
+} nfdu8filteritem_t;
+
+static nfdresult_t emscripten_open_dialog(nfdu8char_t** outPath, 
+                                          const nfdu8filteritem_t* filterList, 
+                                          int filterCount,
+                                          const nfdu8char_t* defaultPath) {
+    if (!outPath) return NFD_ERROR;
+    *outPath = nullptr;
+    
+    // Free previous selection
+    if (g_selected_file_path) {
+        free(g_selected_file_path);
+        g_selected_file_path = nullptr;
+    }
+    
+    // Build accept string from filters (e.g., ".nes,.nsf")
+    std::string accept_str;
+    if (filterList && filterCount > 0) {
+        for (int i = 0; i < filterCount; ++i) {
+            if (i > 0) accept_str += ",";
+            std::string spec = filterList[i].spec;
+            // Convert "nes" to ".nes", handle "*" specially
+            if (spec == "*") {
+                accept_str += "*/*";
+            } else {
+                // Split by comma if multiple extensions
+                size_t pos = 0;
+                while ((pos = spec.find(',')) != std::string::npos) {
+                    std::string ext = spec.substr(0, pos);
+                    if (ext.find('.') == std::string::npos) {
+                        accept_str += ".";
+                    }
+                    accept_str += ext + ",";
+                    spec.erase(0, pos + 1);
+                }
+                if (spec.find('.') == std::string::npos) {
+                    accept_str += ".";
+                }
+                accept_str += spec;
+            }
+        }
+    }
+    
+    // Create file input element and trigger click
+    // Note: File selection is asynchronous in browsers
+    // We trigger the file picker and return CANCEL
+    // The file will be saved to /tmp/ and can be checked in the main loop
+    const char* accept_cstr = accept_str.empty() ? nullptr : accept_str.c_str();
+    
+    g_file_selection_pending = false;
+    
+    EM_ASM_({
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.style.display = 'none';
+        if ($0) {
+            var accept = UTF8ToString($0);
+            input.accept = accept;
+        }
+        
+        input.onchange = function(e) {
+            var file = e.target.files[0];
+            if (file) {
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    var data = new Uint8Array(e.target.result);
+                    var dataPtr = Module._malloc(data.length);
+                    Module.HEAPU8.set(data, dataPtr);
+                    Module.ccall('emscripten_file_selected', null, 
+                        ['string', 'number', 'number'], 
+                        [file.name, dataPtr, data.length]);
+                    Module._free(dataPtr);
+                };
+                reader.readAsArrayBuffer(file);
+            }
+            document.body.removeChild(input);
+        };
+        
+        document.body.appendChild(input);
+        input.click();
+    }, accept_cstr);
+    
+    // Return CANCEL - file selection is async, will be handled in main loop
+    return NFD_CANCEL;
+}
+
+#define NFD_OpenDialogU8 emscripten_open_dialog
+#define NFD_FreePathU8(path) do { if (path) free(path); } while(0)
+#define NFD_Init() do {} while(0)
+#define NFD_Quit() do { if (g_selected_file_path) { free(g_selected_file_path); g_selected_file_path = nullptr; } } while(0)
+
+#else
 #include "nfd.h"
+#endif
 
 // Audio Visualizer
 #include "AudioVisualizer.h"
@@ -1578,6 +1732,36 @@ void frame(void) {
     const int width = sapp_width();
     const int height = sapp_height();
     simgui_new_frame({ width, height, sapp_frame_duration(), sapp_dpi_scale() });
+
+#ifdef EMSCRIPTEN_PLATFORM
+    // Check for file selection (Emscripten async file selection)
+    const char* selected_file = emscripten_check_file_selection();
+    if (selected_file) {
+        // Determine file type from extension and load accordingly
+        std::string filepath = selected_file;
+        std::string ext = "";
+        size_t dot_pos = filepath.find_last_of('.');
+        if (dot_pos != std::string::npos) {
+            ext = filepath.substr(dot_pos + 1);
+            // Convert to lowercase
+            for (char& c : ext) {
+                c = std::tolower(c);
+            }
+        }
+        
+        if (ext == "nsf" || ext == "nsfe") {
+            load_nsf_file(selected_file);
+            postload_preprocess();
+        } else if (ext == "nes") {
+            load_nes_rom(selected_file);
+        } else if (ext == "mid" || ext == "midi") {
+            load_midi_file(selected_file);
+        } else if (ext == "sf2" || ext == "sf3") {
+            load_soundfont(selected_file);
+            scan_soundfont_folder();
+        }
+    }
+#endif
 
     // Run NES emulator frame if active
     if (current_mode == AppMode::NES_EMULATOR && state.nes_emu.isRunning()) {
