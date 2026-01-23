@@ -24,57 +24,13 @@ extern "C" {
 #include "perfect2a03.h"
 }
 
+// Include sokol-shdc generated shader header
+#include "A2A03Visualizer.glsl.h"
+
 // Node state values
 static const uint8_t NODE_INACTIVE = 100;
 static const uint8_t NODE_ACTIVE = 190;
 static const uint8_t NODE_HIGHLIGHTED = 255;
-
-// Shader source code (embedded)
-// Vertex shader
-static const char* vs_source = R"(
-#version 330
-uniform vec4 color0;
-uniform vec2 half_size;
-uniform vec2 offset;
-uniform vec2 scale;
-
-uniform sampler2D palette_tex;
-
-layout(location=0) in vec2 pos;
-layout(location=1) in ivec2 uv;
-
-out vec4 color;
-
-void main() {
-    vec2 p = (pos - half_size) + offset;
-    p *= scale;
-    gl_Position = vec4(p, 0.5, 1.0);
-    float r = texelFetch(palette_tex, ivec2(uv.x & 255, uv.x >> 8), 0).r;
-    color = vec4(color0.xyz * r, color0.w);
-}
-)";
-
-// Fragment shader (alpha blend)
-static const char* fs_alpha_source = R"(
-#version 330
-in vec4 color;
-out vec4 frag_color;
-
-void main() {
-    frag_color = color;
-}
-)";
-
-// Fragment shader (additive blend)
-static const char* fs_add_source = R"(
-#version 330
-in vec4 color;
-out vec4 frag_color;
-
-void main() {
-    frag_color = vec4(color.rgb * color.a, 1.0);
-}
-)";
 
 A2A03Visualizer::A2A03Visualizer() {
     // Initialize all to default values
@@ -131,51 +87,18 @@ bool A2A03Visualizer::init() {
         }
     }
     
-    // Create shaders using new Sokol API
-    sg_shader_desc shader_desc_alpha = {};
-    shader_desc_alpha.vertex_func.source = vs_source;
-    shader_desc_alpha.fragment_func.source = fs_alpha_source;
+    // Create shaders using sokol-shdc generated descriptors
+    const sg_shader_desc* shader_desc_alpha = shd_alpha_shader_desc(sg_query_backend());
+    if (!shader_desc_alpha) {
+        return false;  // Unsupported backend
+    }
+    shader_alpha_ = sg_make_shader(shader_desc_alpha);
     
-    // Vertex attributes
-    shader_desc_alpha.attrs[0].glsl_name = "pos";
-    shader_desc_alpha.attrs[0].base_type = SG_SHADERATTRBASETYPE_FLOAT;
-    shader_desc_alpha.attrs[1].glsl_name = "uv";
-    shader_desc_alpha.attrs[1].base_type = SG_SHADERATTRBASETYPE_SINT;
-    
-    // Uniform block (vertex shader stage)
-    shader_desc_alpha.uniform_blocks[0].stage = SG_SHADERSTAGE_VERTEX;
-    shader_desc_alpha.uniform_blocks[0].size = sizeof(float) * 10;  // color0(4) + half_size(2) + offset(2) + scale(2)
-    shader_desc_alpha.uniform_blocks[0].glsl_uniforms[0].glsl_name = "color0";
-    shader_desc_alpha.uniform_blocks[0].glsl_uniforms[0].type = SG_UNIFORMTYPE_FLOAT4;
-    shader_desc_alpha.uniform_blocks[0].glsl_uniforms[1].glsl_name = "half_size";
-    shader_desc_alpha.uniform_blocks[0].glsl_uniforms[1].type = SG_UNIFORMTYPE_FLOAT2;
-    shader_desc_alpha.uniform_blocks[0].glsl_uniforms[2].glsl_name = "offset";
-    shader_desc_alpha.uniform_blocks[0].glsl_uniforms[2].type = SG_UNIFORMTYPE_FLOAT2;
-    shader_desc_alpha.uniform_blocks[0].glsl_uniforms[3].glsl_name = "scale";
-    shader_desc_alpha.uniform_blocks[0].glsl_uniforms[3].type = SG_UNIFORMTYPE_FLOAT2;
-    
-    // Texture view (vertex shader stage, since we sample in VS)
-    shader_desc_alpha.views[0].texture.stage = SG_SHADERSTAGE_VERTEX;
-    shader_desc_alpha.views[0].texture.image_type = SG_IMAGETYPE_2D;
-    shader_desc_alpha.views[0].texture.sample_type = SG_IMAGESAMPLETYPE_FLOAT;
-    
-    // Sampler (vertex shader stage)
-    shader_desc_alpha.samplers[0].stage = SG_SHADERSTAGE_VERTEX;
-    shader_desc_alpha.samplers[0].sampler_type = SG_SAMPLERTYPE_FILTERING;
-    
-    // Texture-sampler pair
-    shader_desc_alpha.texture_sampler_pairs[0].stage = SG_SHADERSTAGE_VERTEX;
-    shader_desc_alpha.texture_sampler_pairs[0].view_slot = 0;
-    shader_desc_alpha.texture_sampler_pairs[0].sampler_slot = 0;
-    shader_desc_alpha.texture_sampler_pairs[0].glsl_name = "palette_tex";
-    
-    shader_desc_alpha.label = "a2a03-shader-alpha";
-    shader_alpha_ = sg_make_shader(&shader_desc_alpha);
-    
-    sg_shader_desc shader_desc_add = shader_desc_alpha;
-    shader_desc_add.fragment_func.source = fs_add_source;
-    shader_desc_add.label = "a2a03-shader-add";
-    shader_add_ = sg_make_shader(&shader_desc_add);
+    const sg_shader_desc* shader_desc_add = shd_add_shader_desc(sg_query_backend());
+    if (!shader_desc_add) {
+        return false;  // Unsupported backend
+    }
+    shader_add_ = sg_make_shader(shader_desc_add);
     
     // Create pipelines (no depth buffer for 2D visualization)
     sg_pipeline_desc pip_desc = {};
@@ -430,13 +353,8 @@ void A2A03Visualizer::renderChip() {
         sg_apply_pipeline(pipeline_alpha_);
     }
     
-    // Uniform data
-    struct {
-        float color0[4];
-        float half_size[2];
-        float offset[2];
-        float scale[2];
-    } vs_params;
+    // Uniform data (using sokol-shdc generated struct)
+    block_vs_params_t vs_params = {};
     
     vs_params.half_size[0] = (seg_max_x_ >> 1) / 65535.0f;
     vs_params.half_size[1] = (seg_max_y_ >> 1) / 65535.0f;
@@ -458,13 +376,13 @@ void A2A03Visualizer::renderChip() {
         // Bind resources
         sg_bindings bindings = {};
         bindings.vertex_buffers[0] = layer_buffers_[i];
-        bindings.views[0] = node_texture_view_;
-        bindings.samplers[0] = node_sampler_;
+        bindings.views[VIEW_palette_tex] = node_texture_view_;
+        bindings.samplers[SMP_palette_tex_smp] = node_sampler_;
         sg_apply_bindings(&bindings);
         
-        // Apply uniforms
+        // Apply uniforms (using sokol-shdc generated uniform block slot)
         sg_range ub_range = { &vs_params, sizeof(vs_params) };
-        sg_apply_uniforms(0, &ub_range);
+        sg_apply_uniforms(UB_block_vs_params, &ub_range);
         
         // Draw
         sg_draw(0, layer_vertex_counts_[i], 1);
