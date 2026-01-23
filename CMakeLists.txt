@@ -51,6 +51,9 @@ if (EMSCRIPTEN)
         -sOFFSCREENCANVAS_SUPPORT
         --use-port=emdawnwebgpu
         -sWASM_BIGINT
+        -sEXPORTED_FUNCTIONS="['_main','_emscripten_file_selected','_emscripten_check_file_selection']"
+        -sEXPORTED_RUNTIME_METHODS="['ccall','cwrap','stringToNewUTF8','UTF8ToString','FS']"
+        -sFORCE_FILESYSTEM
         "--closure 1")
 endif ()
 

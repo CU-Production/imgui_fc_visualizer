@@ -35,28 +35,21 @@ static bool g_file_selection_pending = false;
 static std::function<void(const char*)> g_file_selection_callback = nullptr;
 
 extern "C" {
-    // Called from JavaScript when file is selected
-    EMSCRIPTEN_KEEPALIVE void emscripten_file_selected(const char* filename, uint8_t* data, int data_len) {
-        if (filename && data && data_len > 0) {
+    // Called from JavaScript when file is selected (via FS.writeFile)
+    // This function just sets a flag that a file was selected
+    EMSCRIPTEN_KEEPALIVE void emscripten_file_selected(const char* filepath) {
+        if (filepath) {
             // Free previous path if any
             if (g_selected_file_path) {
                 free(g_selected_file_path);
                 g_selected_file_path = nullptr;
             }
             
-            // Save file to Emscripten's virtual filesystem
-            std::string filepath = "/tmp/";
-            filepath += filename;
-            FILE* f = fopen(filepath.c_str(), "wb");
-            if (f) {
-                fwrite(data, 1, data_len, f);
-                fclose(f);
-                
-                // Store the path
-                g_selected_file_path = (char*)malloc(filepath.length() + 1);
-                strcpy(g_selected_file_path, filepath.c_str());
-                g_file_selection_pending = true;
-            }
+            // Store the path
+            size_t len = strlen(filepath);
+            g_selected_file_path = (char*)malloc(len + 1);
+            strcpy(g_selected_file_path, filepath);
+            g_file_selection_pending = true;
         }
     }
     
@@ -69,6 +62,105 @@ extern "C" {
         return nullptr;
     }
 }
+
+// Export function pointer for JavaScript to call directly
+EM_JS(void, emscripten_trigger_file_dialog, (const char* accept_str), {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.style.display = 'none';
+    
+    if (accept_str) {
+        var accept = UTF8ToString(accept_str);
+        input.accept = accept;
+    }
+    
+    input.onchange = function(e) {
+        var file = e.target.files[0];
+        if (file) {
+            var reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    // Use Emscripten FS API to write file directly
+                    // This avoids function name mangling issues
+                    var data = new Uint8Array(e.target.result);
+                    var filepath = '/tmp/' + file.name;
+                    
+                    // Ensure /tmp directory exists
+                    try {
+                        FS.mkdir('/tmp');
+                    } catch (err) {
+                        // Directory might already exist, ignore
+                    }
+                    
+                    // Write file using FS.writeFile (synchronous, uses ArrayBuffer)
+                    FS.writeFile(filepath, data);
+                    
+                    // Notify C++ code that file is ready
+                    // Use stringToNewUTF8 to allocate string and pass pointer
+                    var filepathPtr = stringToNewUTF8(filepath);
+                    if (filepathPtr) {
+                        // Try to call the function - use multiple fallback methods
+                        var success = false;
+                        
+                        // Method 1: Use Module.ccall if available
+                        if (Module.ccall) {
+                            try {
+                                Module.ccall('emscripten_file_selected', null, 
+                                    ['number'], 
+                                    [filepathPtr]);
+                                success = true;
+                            } catch (err) {
+                                console.warn('ccall failed:', err);
+                            }
+                        }
+                        
+                        // Method 2: Direct function call
+                        if (!success) {
+                            var funcPtr = Module['_emscripten_file_selected'];
+                            if (funcPtr && typeof funcPtr === 'function') {
+                                try {
+                                    funcPtr(filepathPtr);
+                                    success = true;
+                                } catch (err) {
+                                    console.warn('Direct call failed:', err);
+                                }
+                            }
+                        }
+                        
+                        if (!success) {
+                            console.error('Failed to notify C++ code about file selection');
+                        }
+                        
+                        _free(filepathPtr);
+                    }
+                } catch (err) {
+                    console.error('Error processing file:', err);
+                }
+            };
+            reader.onerror = function(err) {
+                console.error('FileReader error:', err);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+        // Remove input element after a short delay
+        setTimeout(function() {
+            if (input.parentNode) {
+                input.parentNode.removeChild(input);
+            }
+        }, 100);
+    };
+    
+    input.oncancel = function() {
+        setTimeout(function() {
+            if (input.parentNode) {
+                input.parentNode.removeChild(input);
+            }
+        }, 100);
+    };
+    
+    document.body.appendChild(input);
+    input.click();
+});
 
 // Simple wrapper for NFD_OpenDialogU8 on Emscripten
 enum nfdresult_t {
@@ -132,36 +224,8 @@ static nfdresult_t emscripten_open_dialog(nfdu8char_t** outPath,
     
     g_file_selection_pending = false;
     
-    EM_ASM_({
-        var input = document.createElement('input');
-        input.type = 'file';
-        input.style.display = 'none';
-        if ($0) {
-            var accept = UTF8ToString($0);
-            input.accept = accept;
-        }
-        
-        input.onchange = function(e) {
-            var file = e.target.files[0];
-            if (file) {
-                var reader = new FileReader();
-                reader.onload = function(e) {
-                    var data = new Uint8Array(e.target.result);
-                    var dataPtr = Module._malloc(data.length);
-                    Module.HEAPU8.set(data, dataPtr);
-                    Module.ccall('emscripten_file_selected', null, 
-                        ['string', 'number', 'number'], 
-                        [file.name, dataPtr, data.length]);
-                    Module._free(dataPtr);
-                };
-                reader.readAsArrayBuffer(file);
-            }
-            document.body.removeChild(input);
-        };
-        
-        document.body.appendChild(input);
-        input.click();
-    }, accept_cstr);
+    // Use EM_JS function for more reliable function calls
+    emscripten_trigger_file_dialog(accept_cstr);
     
     // Return CANCEL - file selection is async, will be handled in main loop
     return NFD_CANCEL;
