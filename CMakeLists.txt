@@ -35,7 +35,7 @@ if (EMSCRIPTEN)
     target_link_libraries(imgui_fc_visualizer PRIVATE sokol imgui game_music_emu agnes TinySoundFont)
     # Define preprocessor macro for Web platform
     target_compile_definitions(imgui_fc_visualizer PRIVATE EMSCRIPTEN_PLATFORM)
-    target_compile_options(imgui_fc_visualizer PRIVATE --use-port=emdawnwebgpu)
+    target_compile_options(imgui_fc_visualizer PRIVATE --use-port=emdawnwebgpu -sASSERTIONS)
 else()
     target_link_libraries(imgui_fc_visualizer PRIVATE sokol imgui game_music_emu agnes nfd TinySoundFont)
 endif()
@@ -44,10 +44,14 @@ target_compile_options(imgui_fc_visualizer PUBLIC $<$<AND:$<CXX_COMPILER_ID:MSVC
 if (EMSCRIPTEN)
     target_compile_options(imgui_fc_visualizer PRIVATE -pthread -Oz --closure 1)
     target_link_libraries(imgui_fc_visualizer PRIVATE
+        -sASSERTIONS
+        -sALLOW_MEMORY_GROWTH
         -sUSE_PTHREADS=1
         -sPTHREAD_POOL_SIZE=4
         -sOFFSCREENCANVAS_SUPPORT
-        --use-port=emdawnwebgpu)  # Enable WebGL2 support for SOKOL_GLES3
+        --use-port=emdawnwebgpu
+        -sWASM_BIGINT
+        "--closure 1")
 endif ()
 
 # Include directories for gme headers and v6502r

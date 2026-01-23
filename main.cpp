@@ -768,6 +768,7 @@ void load_nes_rom(const char* path) {
 // Scan SoundFont folder for .sf2 files
 void scan_soundfont_folder() {
     midi_state.soundfont_files.clear();
+    return;
     
     // Try multiple possible SoundFont directories
     const char* folders[] = {
@@ -2032,6 +2033,15 @@ sapp_desc sokol_main(int argc, char* argv[]) {
     _sapp_desc.enable_dragndrop = true;
     _sapp_desc.max_dropped_files = 1;
     _sapp_desc.max_dropped_file_path_length = 4096;
+    
+#ifdef EMSCRIPTEN_PLATFORM
+    // HTML5 specific settings for Emscripten
+    _sapp_desc.html5.canvas_selector = "#canvas";
+    _sapp_desc.html5.canvas_resize = false;  // Let sokol track CSS size
+    _sapp_desc.html5.preserve_drawing_buffer = false;
+    _sapp_desc.html5.premultiplied_alpha = false;
+    _sapp_desc.high_dpi = true;  // Enable high DPI support
+#endif
     
     return _sapp_desc;
 }
