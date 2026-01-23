@@ -1304,11 +1304,11 @@ void draw_midi_player_window(bool* p_open) {
             
             ImGui::Separator();
             
-            // Playback controls
+            // Playback controls (using text labels)
             ImGui::BeginGroup();
             {
-                // Play/Pause
-                const char* play_label = midi_state.midi_playing ? "\xE2\x8F\xB8" : "\xE2\x96\xB6";
+                // Play/Pause (> / ||)
+                const char* play_label = midi_state.midi_playing ? "||" : ">";
                 if (ImGui::Button(play_label, ImVec2(50, 30))) {
                     if (midi_state.soundfont) {
                         midi_state.midi_playing = !midi_state.midi_playing;
@@ -1316,8 +1316,8 @@ void draw_midi_player_window(bool* p_open) {
                 }
                 ImGui::SameLine();
                 
-                // Stop
-                if (ImGui::Button("\xE2\x8F\xB9", ImVec2(40, 30))) {
+                // Stop ([])
+                if (ImGui::Button("[]", ImVec2(40, 30))) {
                     midi_state.midi_playing = false;
                     reset_midi_playback();
                 }
@@ -1367,13 +1367,11 @@ void init(void) {
     // Load font with Chinese/Japanese support
     ImGuiIO& io = ImGui::GetIO();
 
-    // Custom glyph ranges: Chinese + media control symbols
-    // Media symbols: ⏮⏭⏸⏹▶ are in U+23E0-U+23FF and U+25B0-U+25BF
+    // Custom glyph ranges: Chinese characters
+    // Note: Media control symbols removed, using text labels instead (<<, >, ||, [], >>)
     static const ImWchar custom_ranges[] = {
         0x0020, 0x00FF, // Basic Latin + Latin Supplement
         0x2000, 0x206F, // General Punctuation
-        0x2300, 0x23FF, // Miscellaneous Technical (contains ⏮⏭⏸⏹)
-        0x25A0, 0x25FF, // Geometric Shapes (contains ▶■)
         0x2600, 0x26FF, // Miscellaneous Symbols
         0x3000, 0x30FF, // CJK Symbols and Punctuation, Hiragana, Katakana
         0x31F0, 0x31FF, // Katakana Phonetic Extensions
@@ -1404,34 +1402,8 @@ void init(void) {
         }
     }
 
-    // Merge Segoe UI Symbol for media control icons (has ⏮⏭⏸⏹▶)
-    if (font) {
-        ImFontConfig config;
-        config.MergeMode = true;
-        config.GlyphMinAdvanceX = 16.0f;
-        config.PixelSnapH = true;
-        
-        // Segoe UI Symbol contains media control symbols
-        const char* symbol_fonts[] = {
-            "C:/Windows/Fonts/seguisym.ttf",   // Segoe UI Symbol
-            "C:/Windows/Fonts/segmdl2.ttf",    // Segoe MDL2 Assets
-        };
-        
-        static const ImWchar symbol_ranges[] = {
-            0x2300, 0x23FF, // Miscellaneous Technical
-            0x25A0, 0x25FF, // Geometric Shapes
-            0,
-        };
-        
-        for (const char* symbol_path : symbol_fonts) {
-            FILE* test_file = fopen(symbol_path, "rb");
-            if (test_file) {
-                fclose(test_file);
-                io.Fonts->AddFontFromFileTTF(symbol_path, 16.0f, &config, symbol_ranges);
-                break;
-            }
-        }
-    }
+    // Note: Media control icons removed, using text labels instead (<<, >, ||, [], >>)
+    // No need to merge symbol font anymore
 
     // If no system font found, add default font
     if (!font) {
@@ -1458,37 +1430,8 @@ void init(void) {
         }
     }
 
-    // Merge symbol font for media control icons (⏮⏭⏸⏹▶)
-    if (font) {
-        ImFontConfig config;
-        config.MergeMode = true;
-        config.GlyphMinAdvanceX = 16.0f;
-        config.PixelSnapH = true;
-        
-        // Try to find a font that contains media control symbols
-        // These symbols are in U+23E0-U+23FF (Miscellaneous Technical) and U+25A0-U+25FF (Geometric Shapes)
-        const char* symbol_font_paths[] = {
-            "/fonts/SegoeUISymbol.ttf",           // Segoe UI Symbol (if available)
-            "/fonts/NotoSansSymbols-Regular.ttf", // Noto Symbols
-            "/fonts/NotoSansSymbols2-Regular.ttf", // Noto Symbols 2
-            "/fonts/NotoSansMono-Regular.ttf",     // Noto Sans Mono (may have some symbols)
-        };
-        
-        static const ImWchar symbol_ranges[] = {
-            0x2300, 0x23FF, // Miscellaneous Technical (contains ⏮⏭⏸⏹)
-            0x25A0, 0x25FF, // Geometric Shapes (contains ▶■)
-            0,
-        };
-        
-        for (const char* symbol_path : symbol_font_paths) {
-            FILE* test_file = fopen(symbol_path, "rb");
-            if (test_file) {
-                fclose(test_file);
-                io.Fonts->AddFontFromFileTTF(symbol_path, 16.0f, &config, symbol_ranges);
-                break;  // Successfully merged, no need to try others
-            }
-        }
-    }
+    // Note: Media control icons removed, using text labels instead (<<, >, ||, [], >>)
+    // No need to merge symbol font anymore
 
     // Fallback: try to load from memory if font file is available
     if (!font) {
@@ -1799,12 +1742,11 @@ void draw_player_window() {
         
         ImGui::Separator();
         
-        // Playback controls (using UTF-8 hex escape for Unicode symbols)
-        // ⏮ = U+23EE, ▶ = U+25B6, ⏸ = U+23F8, ⏹ = U+23F9, ⏭ = U+23ED
+        // Playback controls (using text labels instead of Unicode icons)
         ImGui::BeginGroup();
         {
-            // Previous track (⏮)
-            if (ImGui::Button("\xE2\x8F\xAE", ImVec2(40, 30))) {
+            // Previous track (<<)
+            if (ImGui::Button("<<", ImVec2(40, 30))) {
                 if (state.current_track > 0) {
                     state.current_track--;
                     start_track_with_preprocess(state.current_track);
@@ -1812,14 +1754,14 @@ void draw_player_window() {
             }
             ImGui::SameLine();
             
-            // Play/Pause (▶ / ⏸)
-            const char* play_label = state.is_playing.load() ? "\xE2\x8F\xB8" : "\xE2\x96\xB6";
+            // Play/Pause (> / ||)
+            const char* play_label = state.is_playing.load() ? "||" : ">";
             if (ImGui::Button(play_label, ImVec2(50, 30))) {
                 if (!state.is_playing.load()) {
                     // Start track if not started, otherwise just resume
                     if (!state.track_started.load()) {
                         safe_start_track(state.current_track);
-            } else {
+                    } else {
                         state.is_playing.store(true);
                     }
                 } else {
@@ -1829,16 +1771,16 @@ void draw_player_window() {
             }
             ImGui::SameLine();
             
-            // Stop (⏹)
-            if (ImGui::Button("\xE2\x8F\xB9", ImVec2(40, 30))) {
+            // Stop ([])
+            if (ImGui::Button("[]", ImVec2(40, 30))) {
                 state.is_playing.store(false);
                 // Reset to beginning of track
                 state.seek_request.store(0);
             }
-        ImGui::SameLine();
+            ImGui::SameLine();
             
-            // Next track (⏭)
-            if (ImGui::Button("\xE2\x8F\xAD", ImVec2(40, 30))) {
+            // Next track (>>)
+            if (ImGui::Button(">>", ImVec2(40, 30))) {
                 if (state.current_track < state.track_count - 1) {
                     state.current_track++;
                     start_track_with_preprocess(state.current_track);
