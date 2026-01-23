@@ -42,12 +42,14 @@ endif()
 target_compile_options(imgui_fc_visualizer PUBLIC $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<NOT:$<COMPILE_LANGUAGE:CUDA>>>:/wd4819>)
 
 if (EMSCRIPTEN)
-    target_compile_options(imgui_fc_visualizer PRIVATE -pthread -Oz --closure 1)
+    target_compile_options(imgui_fc_visualizer PRIVATE -Oz --closure 1)
     target_link_libraries(imgui_fc_visualizer PRIVATE
         -sASSERTIONS
         -sALLOW_MEMORY_GROWTH
-        -sUSE_PTHREADS=1
-        -sPTHREAD_POOL_SIZE=4
+        # Disable pthreads to avoid SharedArrayBuffer requirement
+        # If you need pthreads, you must add HTTP headers: Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy
+        # -sUSE_PTHREADS=1
+        # -sPTHREAD_POOL_SIZE=4
         -sOFFSCREENCANVAS_SUPPORT
         --use-port=emdawnwebgpu
         -sWASM_BIGINT
