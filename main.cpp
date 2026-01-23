@@ -832,9 +832,72 @@ void load_nes_rom(const char* path) {
 // Scan SoundFont folder for .sf2 files
 void scan_soundfont_folder() {
     midi_state.soundfont_files.clear();
-    return;
     
-    // Try multiple possible SoundFont directories
+#ifdef EMSCRIPTEN_PLATFORM
+    // On Emscripten, use FS API to scan directory
+    // First, get file list from JavaScript
+    int file_count = EM_ASM_INT({
+        try {
+            // Ensure SoundFont directory exists
+            try {
+                FS.mkdir('/SoundFont');
+            } catch (err) {
+                // Directory might already exist, ignore
+            }
+            
+            // Try to read directory
+            var files = [];
+            try {
+                var entries = FS.readdir('/SoundFont');
+                for (var i = 0; i < entries.length; i++) {
+                    var name = entries[i];
+                    if (name === '.' || name === '..') continue;
+                    
+                    var path = '/SoundFont/' + name;
+                    try {
+                        var stat = FS.stat(path);
+                        if (FS.isFile(stat.mode)) {
+                            var ext = name.substring(name.lastIndexOf('.'));
+                            if (ext.toLowerCase() === '.sf2' || ext.toLowerCase() === '.sf3') {
+                                files.push(path);
+                            }
+                        }
+                    } catch (err) {
+                        // Ignore errors for individual files
+                    }
+                }
+            } catch (err) {
+                console.warn('Failed to read SoundFont directory:', err);
+            }
+            
+            // Store files in a global variable that C++ can access
+            Module._soundfont_files = files;
+            return files.length;
+        } catch (err) {
+            console.error('Error scanning SoundFont folder:', err);
+            Module._soundfont_files = [];
+            return 0;
+        }
+    });
+    
+    // Get files from JavaScript and add to vector
+    for (int i = 0; i < file_count; i++) {
+        char* path_ptr = (char*)EM_ASM_INT({
+            var idx = $0;
+            if (Module._soundfont_files && idx < Module._soundfont_files.length) {
+                var path = Module._soundfont_files[idx];
+                return stringToNewUTF8(path);
+            }
+            return 0;
+        }, i);
+        
+        if (path_ptr) {
+            midi_state.soundfont_files.push_back(std::string(path_ptr));
+            free(path_ptr);
+        }
+    }
+#else
+    // On native platforms, use filesystem API
     const char* folders[] = {
         "SoundFont",
         "./SoundFont",
@@ -863,6 +926,7 @@ void scan_soundfont_folder() {
             // Ignore filesystem errors
         }
     }
+#endif
     
     // Sort files alphabetically
     std::sort(midi_state.soundfont_files.begin(), midi_state.soundfont_files.end());

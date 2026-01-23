@@ -77,6 +77,86 @@
             // TOTAL_MEMORY: 67108864,  // 64MB
         };
         
+        // Preload SoundFont files into Emscripten virtual filesystem
+        function preloadSoundFonts() {
+            // List of SoundFont files to preload
+            var soundfontFiles = [
+                'SoundFont/8Rock11e.sf2',
+                'SoundFont/florestan-subset.sf2',
+                'SoundFont/MSGS_Fixed.sf2'
+            ];
+            
+            var loadedCount = 0;
+            var totalFiles = soundfontFiles.length;
+            
+            function loadNextFile() {
+                if (loadedCount >= totalFiles) {
+                    console.log('All SoundFont files preloaded');
+                    return;
+                }
+                
+                var filePath = soundfontFiles[loadedCount];
+                var fileName = filePath.substring(filePath.lastIndexOf('/') + 1);
+                
+                // Use XMLHttpRequest to load file
+                var xhr = new XMLHttpRequest();
+                xhr.open('GET', filePath, true);
+                xhr.responseType = 'arraybuffer';
+                
+                xhr.onload = function() {
+                    if (xhr.status === 200 || xhr.status === 0) {
+                        try {
+                            // Ensure /SoundFont directory exists
+                            try {
+                                Module.FS.mkdir('/SoundFont');
+                            } catch (err) {
+                                // Directory might already exist, ignore
+                            }
+                            
+                            // Write file to virtual filesystem
+                            var data = new Uint8Array(xhr.response);
+                            Module.FS.writeFile('/SoundFont/' + fileName, data);
+                            console.log('Preloaded SoundFont:', fileName);
+                        } catch (err) {
+                            console.error('Error writing SoundFont file:', fileName, err);
+                        }
+                    } else {
+                        console.warn('Failed to load SoundFont file:', filePath, 'Status:', xhr.status);
+                    }
+                    
+                    loadedCount++;
+                    loadNextFile();
+                };
+                
+                xhr.onerror = function() {
+                    console.error('Error loading SoundFont file:', filePath);
+                    loadedCount++;
+                    loadNextFile();
+                };
+                
+                xhr.send();
+            }
+            
+            // Start loading files after Module is ready
+            if (typeof Module !== 'undefined' && Module.FS) {
+                loadNextFile();
+            } else {
+                // Wait for Module to be ready
+                var checkModule = setInterval(function() {
+                    if (typeof Module !== 'undefined' && Module.FS) {
+                        clearInterval(checkModule);
+                        loadNextFile();
+                    }
+                }, 100);
+            }
+        }
+        
+        // Preload SoundFonts when Module is ready
+        Module.postRun = Module.postRun || [];
+        Module.postRun.push(function() {
+            preloadSoundFonts();
+        });
+        
         // Error handling
         window.onerror = function(event) {
             console.error('Window error:', event);
