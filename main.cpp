@@ -1942,6 +1942,78 @@ void cleanup(void) {
     sg_shutdown();
 }
 
+#ifdef EMSCRIPTEN_PLATFORM
+// Helper structure for async file drop handling
+struct DroppedFileContext {
+    std::string filename;
+    std::vector<uint8_t> buffer;
+};
+
+static DroppedFileContext* g_dropped_file_context = nullptr;
+
+// Callback for async file fetch on Emscripten
+static void handle_dropped_file_fetch(const sapp_html5_fetch_response* response) {
+    if (!response || !response->succeeded) {
+        if (g_dropped_file_context) {
+            delete g_dropped_file_context;
+            g_dropped_file_context = nullptr;
+        }
+        return;
+    }
+    
+    if (!g_dropped_file_context) {
+        return;
+    }
+    
+    // Write file to /tmp/ using Emscripten FS API
+    std::string filepath = "/tmp/";
+    filepath += g_dropped_file_context->filename;
+    
+    // Use EM_ASM to call FS.writeFile
+    EM_ASM_({
+        var filepath = UTF8ToString($0);
+        var data = HEAPU8.subarray($1, $1 + $2);
+        
+        // Ensure /tmp directory exists
+        try {
+            FS.mkdir('/tmp');
+        } catch (err) {
+            // Directory might already exist, ignore
+        }
+        
+        // Write file using FS.writeFile
+        FS.writeFile(filepath, data);
+    }, filepath.c_str(), response->data.ptr, response->data.size);
+    
+    // Now load the file based on extension
+    std::string ext = "";
+    size_t dot_pos = g_dropped_file_context->filename.find_last_of('.');
+    if (dot_pos != std::string::npos) {
+        ext = g_dropped_file_context->filename.substr(dot_pos + 1);
+        // Convert to lowercase
+        for (char& c : ext) {
+            c = std::tolower(c);
+        }
+    }
+    
+    if (ext == "nsf" || ext == "nsfe") {
+        load_nsf_file(filepath.c_str());
+        postload_preprocess();
+    } else if (ext == "nes") {
+        load_nes_rom(filepath.c_str());
+    } else if (ext == "mid" || ext == "midi") {
+        load_midi_file(filepath.c_str());
+    } else if (ext == "sf2" || ext == "sf3") {
+        load_soundfont(filepath.c_str());
+        scan_soundfont_folder();
+    }
+    
+    // Clean up
+    delete g_dropped_file_context;
+    g_dropped_file_context = nullptr;
+}
+#endif
+
 void input(const sapp_event* ev) {
     simgui_handle_event(ev);
     
@@ -1949,6 +2021,31 @@ void input(const sapp_event* ev) {
     if (ev->type == SAPP_EVENTTYPE_FILES_DROPPED) {
         const int num_files = sapp_get_num_dropped_files();
         if (num_files > 0) {
+#ifdef EMSCRIPTEN_PLATFORM
+            // On Emscripten, we need to fetch file content asynchronously
+            const char* filename = sapp_get_dropped_file_path(0);
+            if (filename && filename[0] != '\0') {
+                // Get file size
+                uint32_t file_size = sapp_html5_get_dropped_file_size(0);
+                if (file_size > 0) {
+                    // Allocate buffer and context
+                    g_dropped_file_context = new DroppedFileContext();
+                    g_dropped_file_context->filename = filename;
+                    g_dropped_file_context->buffer.resize(file_size);
+                    
+                    // Fetch file asynchronously - create request struct as local variable
+                    sapp_html5_fetch_request request{};
+                    request.dropped_file_index = 0;
+                    request.callback = handle_dropped_file_fetch;
+                    request.buffer.ptr = g_dropped_file_context->buffer.data();
+                    request.buffer.size = file_size;
+                    request.user_data = nullptr;
+                    
+                    sapp_html5_fetch_dropped_file(&request);
+                }
+            }
+#else
+            // On native platforms, file path is directly available
             const char* path = sapp_get_dropped_file_path(0);
             if (path && path[0] != '\0') {
                 // Check file extension and load appropriately
@@ -1964,6 +2061,7 @@ void input(const sapp_event* ev) {
                     scan_soundfont_folder();  // Refresh list
                 }
             }
+#endif
         }
     }
     
